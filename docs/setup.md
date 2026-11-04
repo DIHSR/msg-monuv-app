@@ -6,7 +6,7 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
 
 ## 1. Supabase
 
-1. **Aplicar a migration:** SQL Editor → cole `supabase/migrations/20261104000001_schema.sql` → Run. Se preferir a CLI: `npx supabase link` seguido de `npx supabase db push`.
+1. **Aplicar a migration:** SQL Editor → cole os arquivos de `supabase/migrations/` em ordem (`…0001_schema.sql`, depois `…0002_security_fixes.sql`) → Run. Se preferir a CLI: `npx supabase link` seguido de `npx supabase db push`.
 2. **Authentication → Sign In / Providers:**
    - Email: habilitado.
    - **Allow new users to sign up: DESLIGADO.** O sistema é por convite, e assim o revisor nunca cai num fluxo de trial.
@@ -30,10 +30,11 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
    - `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` permite que os Code nodes leiam `$env.MONUV_*`.
    - `NODE_FUNCTION_ALLOW_BUILTIN=crypto` é necessário para o HMAC do webhook e para gerar o PIN de registro.
    - Com task runners externos (n8n 2.x, `n8n-runners`), as variáveis `NODE_FUNCTION_ALLOW_*` vão no container do **runner**.
-2. **CORS:** ajuste as origens e gere os workflows:
+2. **CORS:** por padrão os workflows aceitam só `https://msg.monuv.com.br`. Para um n8n de desenvolvimento, gere com origens extras:
    ```bash
    MONUV_ALLOWED_ORIGINS="https://msg.monuv.com.br,http://localhost:5173" node n8n/build.mjs
    ```
+   Não importe no n8n de produção workflows gerados com `localhost`.
 3. **Importar:** em cada `n8n/workflows/*.json`, use n8n → *Import from File* e **ative** o workflow.
 4. **URLs geradas** (supondo `https://n8n.seudominio.com.br`):
 
@@ -88,7 +89,8 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
    |---|---|---|
    | `</^[^.]+$\|\.(?!(css\|gif\|ico\|jpg\|js\|png\|txt\|svg\|woff\|woff2\|ttf\|map\|json\|webp)$)([^.]+$)/>` | `/index.html` | 200 (Rewrite) |
 
-5. **Custom domain:** `msg.monuv.com.br`. O Amplify emite o certificado. Se o DNS de `monuv.com.br` não estiver no Route 53, crie o CNAME indicado.
+5. **Headers de segurança:** o `customHttp.yml` da raiz (HSTS, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy`) é aplicado pelo Amplify automaticamente.
+6. **Custom domain:** `msg.monuv.com.br`. O Amplify emite o certificado. Se o DNS de `monuv.com.br` não estiver no Route 53, crie o CNAME indicado.
 
 **Alternativa: S3 + CloudFront.** Bucket privado com OAC, `npm run build` e `aws s3 sync web/dist s3://BUCKET --delete`. No CloudFront, configure *Error pages* 403 e 404 para `/index.html` com código 200, e faça uma invalidação a cada deploy.
 

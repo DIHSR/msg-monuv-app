@@ -53,7 +53,12 @@ O passo a passo completo (Supabase, n8n, Meta App e AWS) está em **[docs/setup.
 ## Testes
 
 ```bash
-node n8n/build.mjs                    # gera os workflows (checa a sintaxe de cada Code node)
-node n8n/test/run-code-node.test.mjs  # assinatura do webhook, payload de envio, limites
+node n8n/build.mjs                              # gera os workflows (checa a sintaxe de cada Code node)
+node --test n8n/test/*.test.mjs                 # Code nodes reais com mocks (assinatura, envio, regressões de segurança)
+cd supabase/tests && npm install && npm test    # migrations em Postgres local (PGlite): RLS, Vault, cotas, regressões
 cd web && npm run lint && npm run build
 ```
+
+## Segurança
+
+A auditoria (skill `security-audit`, perfil `quick`) e suas correções estão descritas em [docs/security.md](docs/security.md).
