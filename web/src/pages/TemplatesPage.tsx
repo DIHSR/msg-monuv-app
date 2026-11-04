@@ -58,7 +58,7 @@ export function TemplatesPage() {
     if (!active) return
     setSyncing(true)
     try {
-      const r = await callN8n<MetaCallResult<{ count: number }>>('templates-sync', { wa_account_id: active.id })
+      const r = await callN8n<MetaCallResult<{ count: number }>>('templates.sync', { wa_account_id: active.id })
       setLastSync(r)
       toast.success(`${r.data?.count ?? 0} templates sincronizados com a Meta.`)
     } catch (err) {

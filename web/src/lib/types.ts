@@ -136,7 +136,7 @@ export interface CampaignRecipient {
   campaign_id: string
   to_number: string
   params: SendParams
-  status: 'pending' | 'sent' | 'failed'
+  status: 'pending' | 'sending' | 'sent' | 'failed'
   wa_message_id: string | null
   error: unknown
   processed_at: string | null

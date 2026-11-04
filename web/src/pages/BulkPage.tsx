@@ -183,8 +183,8 @@ export function BulkPage() {
         if (e2) throw e2
       }
 
-      await callN8n('campaigns-start', { campaign_id: camp.id })
-      toast.success(`Campanha iniciada com ${recipients.length} destinatários.`)
+      await callN8n('campaigns.start', { campaign_id: camp.id })
+      toast.success(`Campanha com ${recipients.length} destinatários na fila. O envio começa em até 1 minuto.`)
       setRows([])
       setColumns([])
       setFileName('')

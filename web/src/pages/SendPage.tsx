@@ -167,7 +167,7 @@ export function SendPage() {
       body_preview: renderBodyPreview(template, values),
     }
     try {
-      const r = await callN8n<SendResult>('messages-send', body)
+      const r = await callN8n<SendResult>('messages.send', body)
       setPanel({
         request: r.request,
         response: r.response,

@@ -63,7 +63,7 @@ export function TemplateCreatePage() {
     setSubmitting(true)
     setResult(null)
     try {
-      const r = await callN8n<CreateResult>('templates-create', { wa_account_id: active.id, template: payload })
+      const r = await callN8n<CreateResult>('templates.create', { wa_account_id: active.id, template: payload })
       setResult(r)
       toast.success('Template enviado para análise da Meta.')
       qc.invalidateQueries({ queryKey: ['templates', active.id] })

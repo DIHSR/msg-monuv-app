@@ -23,6 +23,7 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   LIMIT_EXCEEDED: { label: 'Limite excedido', tone: 'red' },
   // Mensagens
   pending: { label: 'Pendente', tone: 'slate' },
+  sending: { label: 'Enviando', tone: 'blue' },
   accepted: { label: 'Aceita', tone: 'blue' },
   sent: { label: 'Enviada', tone: 'blue' },
   delivered: { label: 'Entregue', tone: 'green' },

@@ -86,7 +86,7 @@ function AccountCard({ account }: { account: WaAccount }) {
   const refresh = async () => {
     setLoading(true)
     try {
-      const r = await callN8n<ExchangeResult>('connection-refresh', { wa_account_id: account.id })
+      const r = await callN8n<ExchangeResult>('connection.refresh', { wa_account_id: account.id })
       setResult(r)
       toast.success('Status atualizado com a Meta.')
     } catch (err) {
@@ -159,7 +159,7 @@ export function ConnectionPage() {
     try {
       const es = await launchEmbeddedSignup()
       setBusy('exchange')
-      const r = await callN8n<ExchangeResult>('es-exchange', {
+      const r = await callN8n<ExchangeResult>('es.exchange', {
         code: es.code,
         waba_id: es.waba_id,
         phone_number_id: es.phone_number_id,
