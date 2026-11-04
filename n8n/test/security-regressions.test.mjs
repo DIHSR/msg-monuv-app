@@ -1,14 +1,14 @@
 // Regressões da auditoria de segurança (run-1). Executa o código real dos Code nodes.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { ENV, httpMock, is, nodeCode, ok, runNode, sign, workflow } from './code-node.mjs'
+import { ENV, httpMock, is, nodeCode, ok, routed, runNode, workflow } from './code-node.mjs'
 
 const auth = [is('GET', '/auth/v1/user'), ok({ id: 'user-A' })]
 const ctxNoAccount = [is('POST', '/rpc/n8n_user_context'), ok({ ok: true, can_use_app: true, account: null, token: null })]
-const req = (body) => [{ json: { headers: { authorization: 'Bearer jwt' }, body } }]
+const req = (body) => routed(body)
 
 // ---------------------------------------------------------------- es-exchange
-const esCode = nodeCode('monuv-es-exchange.json', 'Processar')
+const esCode = nodeCode('es.exchange')
 const esRoutes = ({ targetIds = ['WABA_A'], phones = ['PN_A'], existing = [], claim = { ok: true, account: { id: 'acc-1', status: 'connected' } } } = {}) => [
   auth,
   ctxNoAccount,
@@ -75,8 +75,8 @@ test('es-exchange não devolve o PIN de registro na resposta', async () => {
 })
 
 // ---------------------------------------------------------------- webhook
-const procCode = nodeCode('monuv-meta-webhook.json', 'Processar eventos')
-const sigCode = nodeCode('monuv-meta-webhook.json', 'Validar assinatura')
+const procCode = nodeCode('Processar eventos')
+const sigCode = nodeCode('Validar assinatura')
 
 test('webhook não atribui mensagem a tenant cuja WABA difere do envelope assinado', async () => {
   const m = httpMock([[is('GET', '/rest/v1/wa_accounts'), ok([{ id: 'acc-B', user_id: 'user-B', waba_id: 'WABA_B' }])]])
@@ -115,7 +115,7 @@ test('webhook atualiza status de template só nas contas da WABA do envelope', a
 })
 
 // ---------------------------------------------------------------- envio
-const sendCode = nodeCode('monuv-messages-send.json', 'Processar')
+const sendCode = nodeCode('messages.send')
 const ctxDemo = [is('POST', '/rpc/n8n_user_context'), ok({ ok: true, can_use_app: true, daily_send_limit: 1, sends_today: 0, token: 'TKN', account: { id: 'acc-1', phone_number_id: 'PN1' } })]
 
 test('messages-send reserva a cota de forma atômica e devolve 429 sem chamar a Meta', async () => {
@@ -127,26 +127,25 @@ test('messages-send reserva a cota de forma atômica e devolve 429 sem chamar a 
 })
 
 // ---------------------------------------------------------------- campanhas
-const prepCode = nodeCode('monuv-campaigns-start.json', 'Preparar campanha')
+const startCode = nodeCode('campaigns.start')
 
-test('campaigns-start só inicia se a transição draft→running ocorrer (sem envio duplicado)', async () => {
-  const camp = { id: '11111111-1111-1111-1111-111111111111', wa_account_id: 'acc-1', status: 'draft', user_id: 'user-A' }
+test('campaigns.start só enfileira se a transição draft→queued ocorrer (sem envio duplicado)', async () => {
+  const camp = { id: '11111111-1111-1111-1111-111111111111', wa_account_id: 'acc-1', status: 'draft' }
   const m = httpMock([
-    auth,
     [is('GET', '/rest/v1/campaigns'), ok([camp])],
     [is('POST', '/rpc/n8n_user_context'), ok({ ok: true, can_use_app: true, is_demo: false, token: 't', account: { id: 'acc-1' } })],
     [is('GET', '/rest/v1/campaign_recipients'), ok([{ id: 'r1' }, { id: 'r2' }])],
-    [is('PATCH', '/rest/v1/campaigns'), ok([])], // outra execução já iniciou
+    [is('PATCH', '/rest/v1/campaigns'), ok([])], // outra requisição já enfileirou
   ])
-  const [o] = await runNode(prepCode, { items: req({ campaign_id: camp.id }), helpers: m.helpers })
+  const [o] = await runNode(startCode, { items: req({ campaign_id: camp.id }), helpers: m.helpers })
   const patch = m.calls.find((c) => c.method === 'PATCH')
   assert.match(patch.url, /status=eq\.draft/)
+  assert.deepEqual(patch.body, { status: 'queued', total: 2 })
   assert.equal(o.json.status, 409)
-  assert.notEqual(o.json.proceed, true)
 })
 
 // ---------------------------------------------------------------- erros e build
-const refreshCode = nodeCode('monuv-connection-refresh.json', 'Processar')
+const refreshCode = nodeCode('connection.refresh')
 
 test('erros internos não expõem detalhes do Supabase ao navegador', async () => {
   const m = httpMock([auth, [is('POST', '/rpc/n8n_user_context'), { statusCode: 500, body: { message: 'relation "x" secret detail' } }]])
@@ -156,19 +155,19 @@ test('erros internos não expõem detalhes do Supabase ao navegador', async () =
   assert.equal(o.json.body.error.ref, 'exec-1')
 })
 
-test('workflows: webhook da Meta não guarda execuções bem-sucedidas; CORS padrão sem localhost', async () => {
-  assert.equal(workflow('monuv-meta-webhook.json').settings.saveDataSuccessExecution, 'none')
-  for (const f of ['monuv-messages-send.json', 'monuv-es-exchange.json']) {
-    const wh = workflow(f).nodes.find((n) => n.type === 'n8n-nodes-base.webhook')
-    assert.ok(!wh.parameters.options.allowedOrigins.includes('localhost'), f)
-  }
+test('workflow: execuções com sucesso não são salvas; CORS padrão sem localhost; Meta sem CORS', async () => {
+  const wf = workflow()
+  assert.equal(wf.settings.saveDataSuccessExecution, 'none')
+  const api = wf.nodes.find((n) => n.name === 'Webhook API')
+  assert.equal(api.parameters.options.allowedOrigins, 'https://msg.monuv.com.br')
+  const metaPost = wf.nodes.find((n) => n.name === 'Meta POST (eventos)')
+  assert.equal(metaPost.parameters.options.rawBody, true)
 })
 
 test('verificação GET continua aceitando só o verify token configurado', async () => {
-  const code = nodeCode('monuv-meta-webhook.json', 'Verificar token')
+  const code = nodeCode('Verificar token')
   const q = (t) => [{ json: { query: { 'hub.mode': 'subscribe', 'hub.verify_token': t, 'hub.challenge': '9' } } }]
   assert.equal((await runNode(code, { items: q(ENV.MONUV_META_VERIFY_TOKEN) }))[0].json.status, 200)
   assert.equal((await runNode(code, { items: q('verifica-12') }))[0].json.status, 403)
   assert.equal((await runNode(code, { items: q(['verifica-123']) }))[0].json.status, 403)
-  void sign
 })

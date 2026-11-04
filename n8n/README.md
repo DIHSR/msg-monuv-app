@@ -1,34 +1,61 @@
 # n8n — back-end do Monuv Mensagens
 
-`src/*.js` contém o código de cada Code node. `build.mjs` junta `src/_lib.js` (helpers de Supabase, Graph API, autenticação e erros) a cada arquivo e gera `workflows/*.json` para importar.
+Tudo roda num **único workflow**, `Monuv` (`workflows/monuv.json`), gerado a partir de `src/`:
 
 ```bash
-MONUV_ALLOWED_ORIGINS="https://msg.monuv.com.br,http://localhost:5173" node n8n/build.mjs
-node n8n/test/run-code-node.test.mjs
+MONUV_ALLOWED_ORIGINS="https://msg.monuv.com.br" node n8n/build.mjs   # padrão: só produção
+node --test n8n/test/*.test.mjs
 ```
 
-## Padrão de cada endpoint
-
 ```
-Webhook (POST, responseMode = responseNode, CORS restrito)
-  → Code "Processar"   valida JWT do Supabase → n8n_user_context (token via Vault) → Graph API → grava
-  → Respond to Webhook { status, body }
-```
-
-- **Respostas:** sempre `{ ok, request, response, http_status, data?, error? }`. `request` e `response` alimentam o painel JSON do front. O token **nunca** volta na resposta: ele vai no header `Authorization`, não na URL.
-- **Execuções:** as bem-sucedidas não são salvas (`saveDataSuccessExecution: none`), para não guardar dados pessoais no n8n. As com erro ficam salvas.
-
-## Webhook da Meta
-
-```
-GET  → Verificar token → Responder challenge (texto)
-POST (Raw Body) → Validar assinatura → Responder 200/401 → Processar eventos
+src/
+  _lib.js                 helpers comuns, prefixados em todo Code node (Supabase, Graph, auth, erros, envio)
+  api/router.js           autentica o JWT uma vez e escolhe a saída do Switch pela `action`
+  api/<ação>.js           um handler por ação (recebe { user, body } já autenticado)
+  meta/verify-get.js      handshake GET da Meta (verify token em tempo constante)
+  meta/verify-signature.js HMAC X-Hub-Signature-256 sobre o corpo bruto
+  meta/process.js         eventos: status, mensagens recebidas, templates, PARTNER_REMOVED
+  scheduler/campaigns-worker.js  fila de campanhas (1 min, lotes com SKIP LOCKED)
+  scheduler/demo-monitor.js      login do demo do revisor (12 h)
 ```
 
-- **Assinatura:** `HMAC-SHA256(corpo bruto, APP_SECRET)` comparado com `X-Hub-Signature-256` via `crypto.timingSafeEqual`.
-- **Resposta rápida:** a resposta sai **antes** do processamento, porque a Meta reenvia se não receber 200 rápido.
-- **Status fora de ordem:** são tratados no banco (`apply_message_status`). Um `read` não volta para `delivered`, e eventos duplicados são ignorados.
-- **Corrida:** se o status chegar antes do n8n gravar o `wamid`, o evento fica guardado e `attach_message_events` o liga à mensagem depois.
+## Faixas do workflow
+
+```
+API        Webhook POST monuv/api → Roteador → Switch "Ação" ─┬→ es.exchange ──────┐
+                                                             ├→ connection.refresh│
+                                                             ├→ templates.sync    ├→ Responder API
+                                                             ├→ templates.create  │
+                                                             ├→ messages.send     │
+                                                             ├→ campaigns.start ──┘
+                                                             └→ (erro de auth/ação) → Responder API
+Meta       Webhook GET  → Verificar token → Responder challenge
+           Webhook POST (raw body) → Validar assinatura → Responder 200/401 → Processar eventos
+Agendador  A cada minuto → Fila de campanhas
+           A cada 12h   → Monitor do demo
+```
+
+**Nova ação da API:**
+1. crie `src/api/<nome>.js`;
+2. adicione uma linha em `API_ACTIONS` no `build.mjs`. O Roteador e o Switch são gerados a partir dessa tabela.
+3. adicione a ação ao tipo `N8nAction` em `web/src/lib/api.ts`.
+
+**Respostas da API:**
+- sempre `{ ok, request, response, http_status, data?, error? }`. `request` e `response` alimentam o painel JSON do front;
+- o token da Meta nunca volta: ele vai no header `Authorization`;
+- erros internos voltam genéricos, com `error.ref` igual ao id da execução. O detalhe fica em `public.app_errors`.
+
+**Campanhas:**
+1. `campaigns.start` só move `draft → queued`;
+2. a faixa Agendador reserva lotes no banco (`claim_campaign_batch`, com `FOR UPDATE SKIP LOCKED`), envia e marca cada destinatário.
+
+Execuções sobrepostas não duplicam envios. Se uma execução cai no meio, os destinatários que ficaram em `sending` há mais de 10 minutos voltam para a fila. O agendador alterna entre campanhas de tenants diferentes.
+
+**Webhook da Meta:**
+- assinatura `HMAC-SHA256(corpo bruto, APP_SECRET)`, comparada com `timingSafeEqual`;
+- o 200 sai antes do processamento;
+- POST com assinatura inválida grava só tamanho e SHA-256;
+- o evento só é atribuído à conta cuja WABA bate com o envelope assinado.
 
 Para testar o webhook publicado:
 

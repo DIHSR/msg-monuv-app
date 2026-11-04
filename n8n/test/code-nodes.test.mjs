@@ -2,9 +2,9 @@
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { test } from 'node:test'
-import { ENV, httpMock, is, nodeCode, ok, runNode, sign } from './code-node.mjs'
+import { ENV, httpMock, is, nodeCode, ok, routed, runNode, sign } from './code-node.mjs'
 
-const sigCode = nodeCode('monuv-meta-webhook.json', 'Validar assinatura')
+const sigCode = nodeCode('Validar assinatura')
 async function verify(raw, header) {
   const headers = header === undefined ? {} : { 'x-hub-signature-256': header }
   const [out] = await runNode(sigCode, { items: [{ json: { headers, body: {} } }], helpers: { getBinaryDataBuffer: async () => raw } })
@@ -41,22 +41,16 @@ test('corpo adulterado, header ausente ou digest curto → 401', async () => {
 })
 
 test('GET de verificação: token certo devolve challenge; errado → 403', async () => {
-  const code = nodeCode('monuv-meta-webhook.json', 'Verificar token')
+  const code = nodeCode('Verificar token')
   const q = (t) => [{ json: { query: { 'hub.mode': 'subscribe', 'hub.verify_token': t, 'hub.challenge': '42' } } }]
   assert.deepEqual((await runNode(code, { items: q(ENV.MONUV_META_VERIFY_TOKEN) }))[0].json, { status: 200, body: '42' })
   assert.equal((await runNode(code, { items: q('x') }))[0].json.status, 403)
 })
 
-const sendCode = nodeCode('monuv-messages-send.json', 'Processar')
-
-test('messages-send sem Authorization → 401', async () => {
-  const [o] = await runNode(sendCode, { items: [{ json: { headers: {}, body: {} } }], helpers: httpMock([]).helpers })
-  assert.equal(o.json.status, 401)
-})
+const sendCode = nodeCode('messages.send')
 
 test('messages-send monta o payload do template e não vaza o token', async () => {
   const m = httpMock([
-    [is('GET', '/auth/v1/user'), ok({ id: 'user-1' })],
     [is('POST', '/rpc/n8n_user_context'), ok({ ok: true, can_use_app: true, token: 'TKN', account: { id: 'acc-1', phone_number_id: 'PN1', display_phone_number: '+55 11 4000-0000' } })],
     [is('POST', '/rpc/reserve_outbound_message'), ok({ ok: true, id: 'msg-1' })],
     [(o) => o.url.includes('graph.facebook.com'), ok({ messaging_product: 'whatsapp', messages: [{ id: 'wamid.ABC', message_status: 'accepted' }] })],
@@ -65,7 +59,7 @@ test('messages-send monta o payload do template e não vaza o token', async () =
     wa_account_id: 'acc-1', to: '+55 (11) 99999-8888', template_name: 'pedido_confirmado', language: 'pt_BR',
     params: { body: [{ key: '1', value: 'Maria' }, { key: '2', value: '#123' }], buttons: [{ index: 0, value: 'abc' }] },
   }
-  const [o] = await runNode(sendCode, { items: [{ json: { headers: { authorization: 'Bearer jwt' }, body } }], helpers: m.helpers })
+  const [o] = await runNode(sendCode, { items: routed(body, 'user-1'), helpers: m.helpers })
   assert.equal(o.json.status, 200, JSON.stringify(o.json.body))
   const g = m.calls.find((c) => c.url.includes('graph.facebook.com'))
   assert.equal(g.url, 'https://graph.facebook.com/v24.0/PN1/messages')

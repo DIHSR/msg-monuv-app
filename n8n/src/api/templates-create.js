@@ -1,10 +1,8 @@
-// POST monuv/templates-create — cria template na WABA
+// action "templates.create" — cria template na WABA
 // body: { wa_account_id, template: { name, language, category, components, parameter_format? } }
-const req = $input.first().json;
+const { user, body } = $input.first().json; // vindo do Roteador (já autenticado)
 
 try {
-  const user = await authUser(req);
-  const body = req.body || {};
   const ctx = await userContext(user.id, body.wa_account_id);
   const acc = ctx.account;
   const t = body.template || {};

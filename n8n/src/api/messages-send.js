@@ -1,10 +1,8 @@
-// POST monuv/messages-send — envio individual de template
+// action "messages.send" — envio individual de template
 // body: { wa_account_id, to, template_name, language, params, body_preview }
-const req = $input.first().json;
+const { user, body } = $input.first().json; // vindo do Roteador (já autenticado)
 
 try {
-  const user = await authUser(req);
-  const body = req.body || {};
   const ctx = await userContext(user.id, body.wa_account_id);
 
   const to = onlyDigits(body.to);

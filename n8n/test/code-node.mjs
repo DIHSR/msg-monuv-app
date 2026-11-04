@@ -19,13 +19,19 @@ export const ENV = {
   MONUV_GRAPH_VERSION: 'v24.0',
 }
 
-export function workflow(file) {
-  return JSON.parse(readFileSync(join(here, '..', 'workflows', file), 'utf8'))
+/** O workflow único gerado por n8n/build.mjs. */
+export function workflow() {
+  return JSON.parse(readFileSync(join(here, '..', 'workflows', 'monuv.json'), 'utf8'))
 }
 
-export function nodeCode(workflowFile, nodeName) {
-  return workflow(workflowFile).nodes.find((n) => n.name === nodeName).parameters.jsCode
+export function nodeCode(nodeName) {
+  const node = workflow().nodes.find((n) => n.name === nodeName)
+  if (!node) throw new Error(`node não encontrado: ${nodeName}`)
+  return node.parameters.jsCode
 }
+
+/** Item que o Roteador entrega aos handlers da API (usuário já autenticado). */
+export const routed = (body, userId = 'user-A') => [{ json: { user: { id: userId }, body } }]
 
 export async function runNode(code, { items, env = ENV, helpers = {}, nodes = {}, execution = { id: 'exec-1' } }) {
   const $input = { first: () => items[0], all: () => items }

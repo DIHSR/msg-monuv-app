@@ -1,5 +1,6 @@
-// Agendado: mantém o Supabase (plano Free) acordado e testa o login do usuário demo.
-// O Free pausa o projeto após ~7 dias sem atividade — isso derrubaria o acesso do revisor da Meta.
+// Agendador (a cada 12h): testa o login do usuário demo e se ele ainda tem número e token.
+// Falha a execução de propósito quando algo quebra → aparece em Executions / Error Workflow.
+// (O Supabase Free já fica ativo pelo worker de campanhas, que consulta o banco 1x/min.)
 // Variáveis: MONUV_SUPABASE_ANON_KEY, MONUV_DEMO_EMAIL, MONUV_DEMO_PASSWORD (opcionais para o teste de login).
 const report = { at: new Date().toISOString() };
 

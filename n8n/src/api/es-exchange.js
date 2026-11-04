@@ -1,9 +1,9 @@
-// POST monuv/es-exchange — finaliza o Embedded Signup
+// action "es.exchange" — finaliza o Embedded Signup
 // body: { code, waba_id?, phone_number_id?, business_id?, event? }
 //
 // Ordem importa (auditoria run-1): toda checagem de posse acontece ANTES de qualquer
 // efeito colateral na Meta (subscribed_apps, register) ou no banco.
-const req = $input.first().json;
+const { user, body } = $input.first().json; // vindo do Roteador (já autenticado)
 const steps = [];
 
 /** WABAs que o token trocado realmente pode gerenciar (falha fechado). */
@@ -53,10 +53,8 @@ async function registerPhone(phoneId, token, event) {
 }
 
 try {
-  const user = await authUser(req);
   await userContext(user.id, null, { requireAccount: false });
 
-  const body = req.body || {};
   if (!body.code) throw new HttpError(400, 'bad_request', 'Parâmetro "code" ausente.');
   if (!ENV.APP_ID || !ENV.APP_SECRET) throw new HttpError(500, 'config', 'MONUV_META_APP_ID / MONUV_META_APP_SECRET não configurados.');
 

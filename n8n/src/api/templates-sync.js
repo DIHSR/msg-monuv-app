@@ -1,10 +1,9 @@
-// POST monuv/templates-sync — traz todos os templates da WABA para o Supabase
+// action "templates.sync" — traz todos os templates da WABA para o Supabase
 // body: { wa_account_id }
-const req = $input.first().json;
+const { user, body } = $input.first().json; // vindo do Roteador (já autenticado)
 
 try {
-  const user = await authUser(req);
-  const ctx = await userContext(user.id, (req.body || {}).wa_account_id);
+  const ctx = await userContext(user.id, body.wa_account_id);
   const acc = ctx.account;
 
   const fields = 'id,name,language,status,category,components,rejected_reason,quality_score,parameter_format';
