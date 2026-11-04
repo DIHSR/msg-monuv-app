@@ -290,7 +290,12 @@ revoke insert on public.campaigns, public.campaign_recipients from anon, authent
 grant insert (wa_account_id, name, template_name, template_language) on public.campaigns to authenticated;
 grant insert (campaign_id, to_number, params) on public.campaign_recipients to authenticated;
 
-revoke truncate, references, trigger on all tables in schema public from anon, authenticated;
+-- Só nas tabelas do Monuv Mensagens: o schema public é compartilhado com outros sistemas.
+revoke truncate, references, trigger on
+  public.profiles, public.wa_accounts, public.wa_credentials, public.templates, public.campaigns,
+  public.campaign_recipients, public.messages, public.message_status_events, public.webhook_events,
+  public.app_errors
+from anon, authenticated;
 
 -- -----------------------------------------------------------------------------
 -- Execução: funções de serviço só para service_role

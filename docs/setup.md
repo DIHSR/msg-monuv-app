@@ -6,15 +6,21 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
 
 ## 1. Supabase
 
+> **Projeto compartilhado.** O Supabase do Monuv Mensagens é o mesmo de outros sistemas Monuv (mesmo `auth.users`, mesmo schema `public`). As migrations só criam e alteram objetos do Monuv Mensagens; **não mude configurações globais do projeto** (sign-up, Site URL, templates de e-mail) por causa deste app.
+
 1. **Aplicar as migrations:** SQL Editor → cole os arquivos de `supabase/migrations/` **em ordem**, um por vez → Run:
-   `…0001_schema.sql` → `…0002_security_fixes.sql` → `…0003_campaign_queue.sql` → `…0004_coexistence.sql`. Se preferir a CLI: `npx supabase link` seguido de `npx supabase db push`.
-2. **Authentication → Sign In / Providers:**
-   - Email: habilitado.
-   - **Allow new users to sign up: DESLIGADO.** O sistema é por convite, e assim o revisor nunca cai num fluxo de trial.
-   - Confirm email: tanto faz. O usuário demo é criado já confirmado.
-3. **Authentication → URL Configuration:** Site URL `https://msg.monuv.com.br`. Inclua também `http://localhost:5173` nas Redirect URLs.
-4. **Vault:** já vem habilitado nos projetos Supabase. A migration usa `vault.create_secret`.
-5. **Plano Free:** o projeto **pausa após cerca de 7 dias sem atividade**. A fila de campanhas do workflow `Monuv` consulta o banco a cada minuto (o que mantém o projeto ativo), mas **antes de submeter ao App Review o recomendado é migrar para o Pro**. A Meta pode levar semanas para revisar, e o revisor precisa de acesso por 1 ano.
+   `…0001_schema.sql` → `…0002_security_fixes.sql` → `…0003_campaign_queue.sql` → `…0004_coexistence.sql` → `…0005_shared_project.sql`.
+   - Se a `0001` já foi aplicada (as tabelas `wa_accounts`, `templates` etc. existem), **comece pela `0002`**.
+   - **Não use `supabase db push`** neste projeto: o histórico de migrations é compartilhado com os outros sistemas.
+2. **Quem acessa o Monuv Mensagens:** ter login no projeto **não** dá acesso. Só tem acesso quem tem perfil em `public.profiles`:
+   - usuário que já existe (de outro sistema): `select public.grant_msg_access('pessoa@monuv.com.br');` (trial de 14 dias) ou `…, 'active')` (sem prazo);
+   - usuário novo só do Monuv Mensagens: crie pela Admin API com `app_metadata: { "monuv_msg": true }`. O trigger cria o perfil em trial;
+   - demo do revisor: `supabase/scripts/create-demo-user.mjs` (já marca `monuv_msg` e cria o perfil `permanent`).
+   - Usuários de outros sistemas sem perfil veem "Este login não tem acesso ao Monuv Mensagens".
+3. **Authentication → Sign In / Providers:** **não precisa mexer.** O "Allow new users to sign up" vale para todos os sistemas do projeto; mesmo ligado, quem se cadastra sozinho não ganha perfil no Monuv Mensagens.
+4. **Authentication → URL Configuration:** **não altere o Site URL** (é o dos outros sistemas). Só **adicione** `https://msg.monuv.com.br/**` e `http://localhost:5173/**` em *Redirect URLs*.
+5. **Vault:** já vem habilitado nos projetos Supabase. A migration usa `vault.create_secret`.
+6. **Plano Free:** o projeto **pausa após cerca de 7 dias sem atividade** (os outros sistemas e a fila de campanhas, que consulta o banco a cada minuto, o mantêm ativo). Os **500 MB** do Free são divididos com os outros sistemas: leve isso em conta antes de ligar `MONUV_COEX_SYNC`. **Antes de submeter ao App Review o recomendado é migrar para o Pro.**
 
 ### Chaves
 

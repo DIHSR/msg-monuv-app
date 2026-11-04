@@ -64,17 +64,22 @@ if (!user) {
     password: DEMO_PASSWORD,
     email_confirm: true,
     user_metadata: { full_name: DEMO_NAME },
+    // projeto compartilhado: só quem tem esta marca ganha perfil no Monuv Mensagens
+    app_metadata: { monuv_msg: true },
   });
   console.log(`✔ Usuário criado: ${user.id}`);
 } else {
   console.log(`• Usuário já existe: ${user.id} (senha NÃO alterada — demo é protegido por trigger)`);
 }
 
-// Marca como demo permanente (fora de qualquer trial)
+// Marca como demo permanente (fora de qualquer trial). Upsert: o usuário pode ter sido criado
+// antes do trigger do Monuv (projeto compartilhado) e não ter perfil ainda.
 await call(
-  'PATCH',
-  `/rest/v1/profiles?id=eq.${user.id}`,
+  'POST',
+  `/rest/v1/profiles?on_conflict=id`,
   {
+    id: user.id,
+    email: DEMO_EMAIL,
     full_name: DEMO_NAME,
     company_name: DEMO_COMPANY,
     is_demo: true,
@@ -82,7 +87,7 @@ await call(
     trial_ends_at: null,
     daily_send_limit: DAILY_LIMIT,
   },
-  { Prefer: 'return=minimal' },
+  { Prefer: 'resolution=merge-duplicates,return=minimal' },
 );
 
 // Confere login real com e-mail/senha

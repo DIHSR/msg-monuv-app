@@ -12,7 +12,7 @@ create role anon nologin; create role authenticated nologin; create role service
 create schema auth; create schema vault;
 grant usage on schema public, auth to anon, authenticated, service_role;
 create table auth.users (id uuid primary key default gen_random_uuid(), email text, encrypted_password text,
-  email_change text default '', banned_until timestamptz, deleted_at timestamptz, raw_user_meta_data jsonb default '{}');
+  email_change text default '', banned_until timestamptz, deleted_at timestamptz, raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}');
 create function auth.uid() returns uuid language sql stable
   as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 grant execute on function auth.uid() to anon, authenticated;
@@ -28,9 +28,11 @@ alter default privileges in schema public grant all on tables to anon, authentic
 alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
 `
 
-export async function freshDb() {
+/** `before`: SQL de outros sistemas que já existe no projeto antes das migrations do Monuv. */
+export async function freshDb({ before = '' } = {}) {
   const db = new PGlite()
   await db.exec(SUPABASE_STUBS)
+  if (before) await db.exec(before)
   for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith('.sql')).sort()) {
     await db.exec(readFileSync(join(MIGRATIONS, f), 'utf8'))
   }
@@ -47,7 +49,12 @@ export async function freshDb() {
     }
   }
 
-  const newUser = async (email) => (await one(`insert into auth.users(email, encrypted_password) values ($1, 'h') returning id`, [email])).id
+  /** Usuário do Monuv Mensagens (app_metadata.monuv_msg). `{ msgAccess: false }` = usuário de outro sistema. */
+  const newUser = async (email, { msgAccess = true } = {}) =>
+    (await one(`insert into auth.users(email, encrypted_password, raw_app_meta_data) values ($1, 'h', $2::jsonb) returning id`, [
+      email,
+      JSON.stringify(msgAccess ? { monuv_msg: true } : {}),
+    ])).id
 
   const newAccount = async (userId, waba, phone, status = 'connected') =>
     (await one(`insert into public.wa_accounts(user_id, waba_id, phone_number_id, status) values ($1,$2,$3,$4) returning id`, [userId, waba, phone, status])).id
