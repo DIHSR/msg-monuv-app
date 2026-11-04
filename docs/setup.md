@@ -6,7 +6,8 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
 
 ## 1. Supabase
 
-1. **Aplicar a migration:** SQL Editor → cole os arquivos de `supabase/migrations/` em ordem (`…0001_schema.sql`, depois `…0002_security_fixes.sql`) → Run. Se preferir a CLI: `npx supabase link` seguido de `npx supabase db push`.
+1. **Aplicar as migrations:** SQL Editor → cole os arquivos de `supabase/migrations/` **em ordem**, um por vez → Run:
+   `…0001_schema.sql` → `…0002_security_fixes.sql` → `…0003_campaign_queue.sql` → `…0004_coexistence.sql`. Se preferir a CLI: `npx supabase link` seguido de `npx supabase db push`.
 2. **Authentication → Sign In / Providers:**
    - Email: habilitado.
    - **Allow new users to sign up: DESLIGADO.** O sistema é por convite, e assim o revisor nunca cai num fluxo de trial.
@@ -29,6 +30,7 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
 1. **Variáveis de ambiente:** adicione as de `n8n/.env.example` ao ambiente do n8n e **reinicie**.
    - `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` permite que os Code nodes leiam `$env.MONUV_*`.
    - `NODE_FUNCTION_ALLOW_BUILTIN=crypto` é necessário para o HMAC do webhook e para gerar o PIN de registro.
+   - `MONUV_COEX_SYNC` (padrão `false`): com `true`, ao conectar um número em coexistência o n8n pede à Meta os **contatos e até 180 dias de histórico** do app. O histórico é gravado em `messages`. Essa chamada só pode ser feita **uma vez, até 24 h após a conexão**; depois disso, só desconectando e conectando de novo. Avalie o espaço do Supabase (Free = 500 MB) e a LGPD antes de ligar.
    - Com task runners externos (n8n 2.x, `n8n-runners`), as variáveis `NODE_FUNCTION_ALLOW_*` vão no container do **runner**.
 2. **CORS:** por padrão o workflow aceita só `https://msg.monuv.com.br`. Para um n8n de desenvolvimento, gere com origens extras:
    ```bash
@@ -62,7 +64,10 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
    - Callback URL: `https://n8n.seudominio.com.br/webhook/monuv/meta-webhook`
    - Verify token: o mesmo valor de `MONUV_META_VERIFY_TOKEN`
    - Assine os campos: `messages`, `message_template_status_update`, `message_template_quality_update`, `account_update`, `phone_number_quality_update`.
+   - **Coexistência** (número que continua no app WhatsApp Business): assine também `smb_message_echoes` (mensagens enviadas pelo celular), `history` e `smb_app_state_sync`.
 3. **Facebook Login for Business → Configurations:** crie uma configuração do tipo **WhatsApp Embedded Signup**, com as permissões `whatsapp_business_management` e `whatsapp_business_messaging`. O **Configuration ID** vai em `VITE_FB_ES_CONFIG_ID`.
+   - O front abre o Embedded Signup **v5** (`extras.version: 'v5'`). No v5 a **coexistência vem ligada por padrão**: quem já usa o app WhatsApp Business escaneia um QR code e continua usando o celular; quem não usa segue o fluxo de número novo (SMS). Os v2/v3 foram descontinuados pela Meta em 15/10/2026.
+   - Requisitos da Meta para coexistência: app WhatsApp Business **2.24.17+**, app como **Tech Provider/Solution Partner**, webhook ativo. O número em coexistência fica limitado a **20 mensagens/s**, e grupos, ligações, mensagens temporárias e de visualização única não passam pela API.
 4. **Facebook Login for Business → Settings:**
    - Allowed Domains for the JavaScript SDK: `https://msg.monuv.com.br` (e `https://localhost:5173` se testar local com HTTPS).
    - Login with the JavaScript SDK: **Sim**.

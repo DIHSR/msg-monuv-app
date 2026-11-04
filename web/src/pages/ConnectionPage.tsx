@@ -23,6 +23,7 @@ interface Step {
 interface ExchangeResult {
   ok: boolean
   account?: WaAccount
+  coexistence?: boolean
   steps?: Step[]
   error?: { message: string }
 }
@@ -32,6 +33,8 @@ const STEP_LABELS: Record<string, string> = {
   debug_token: 'Validação das permissões concedidas',
   subscribe_app: 'Assinatura do app na WABA (webhooks)',
   register_phone: 'Registro do número na Cloud API',
+  sync_smb_app_state_sync: 'Sincronização dos contatos do app WhatsApp Business',
+  sync_history: 'Sincronização do histórico de conversas do app',
   phone_details: 'Dados do número',
   waba_details: 'Dados da WABA',
   save_account: 'Gravação da conexão',
@@ -109,6 +112,14 @@ function AccountCard({ account }: { account: WaAccount }) {
             <div className="flex flex-wrap items-center gap-2">
               <p className="truncate font-semibold text-slate-900">{account.verified_name ?? 'Nome não verificado'}</p>
               <StatusBadge status={account.status} />
+              {account.is_on_biz_app && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-600/20"
+                  title="O número continua funcionando no app WhatsApp Business do celular e também pela API oficial."
+                >
+                  <Smartphone className="size-3" /> App + API (coexistência)
+                </span>
+              )}
             </div>
             <p className="font-mono text-sm text-slate-600">{formatPhone(account.display_phone_number)}</p>
           </div>
@@ -132,6 +143,7 @@ function AccountCard({ account }: { account: WaAccount }) {
             </span>
           }
         />
+        <InfoRow label="Modo" value={account.is_on_biz_app ? 'Coexistência (app + API)' : 'Somente API'} />
         <InfoRow label="Conectado em" value={formatDateTime(account.connected_at)} />
       </dl>
       {result?.steps && result.steps.length > 0 && (
@@ -164,11 +176,16 @@ export function ConnectionPage() {
         waba_id: es.waba_id,
         phone_number_id: es.phone_number_id,
         business_id: es.business_id,
+        is_on_biz_app: es.is_on_biz_app,
         event: es.event,
       })
       setResult(r)
       if (r.account) setActiveId(r.account.id)
-      toast.success('Número conectado com sucesso!')
+      toast.success(
+        r.coexistence
+          ? 'Número conectado! Ele continua funcionando no app WhatsApp Business do celular.'
+          : 'Número conectado com sucesso!',
+      )
       qc.invalidateQueries({ queryKey: ['wa_accounts'] })
     } catch (err) {
       if (err instanceof EmbeddedSignupCancelled) {
@@ -215,14 +232,18 @@ export function ConnectionPage() {
           <EmptyState
             icon={<Plug className="size-6" />}
             title="Nenhum número conectado"
-            description="Você será levado a uma janela da Meta para escolher (ou criar) sua conta do WhatsApp Business e o número que deseja usar."
+            description="Você será levado a uma janela da Meta. Se o número já está no app WhatsApp Business, ele continua funcionando no celular (coexistência)."
             action={connectButton}
           />
           <div className="grid gap-4 border-t border-slate-100 p-5 sm:grid-cols-3">
             {[
               { icon: ShieldCheck, t: '1. Entre com o Facebook', d: 'Autorize o acesso do app Monuv à sua conta empresarial.' },
-              { icon: Smartphone, t: '2. Escolha o número', d: 'Selecione a WABA e o número de telefone, e confirme por SMS.' },
-              { icon: Webhook, t: '3. Pronto', d: 'Registramos o número e assinamos os webhooks automaticamente.' },
+              {
+                icon: Smartphone,
+                t: '2. Escolha o número',
+                d: 'Usa o app WhatsApp Business? Escaneie o QR code no celular e continue usando o app. Número novo? Confirme por SMS.',
+              },
+              { icon: Webhook, t: '3. Pronto', d: 'Ativamos o número na API oficial e assinamos os webhooks automaticamente.' },
             ].map((s) => (
               <div key={s.t} className="flex gap-3">
                 <s.icon className="mt-0.5 size-5 shrink-0 text-brand-700" />

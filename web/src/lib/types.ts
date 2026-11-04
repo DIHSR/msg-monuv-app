@@ -27,6 +27,10 @@ export interface WaAccount {
   name_status: string | null
   code_verification_status: string | null
   phone_status: string | null
+  /** Coexistência: o número continua ativo no app WhatsApp Business. */
+  is_on_biz_app: boolean
+  platform_type: string | null
+  coex_sync_requested_at: string | null
   status: AccountStatus
   webhook_subscribed: boolean
   last_error: unknown

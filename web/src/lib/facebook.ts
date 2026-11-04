@@ -52,8 +52,27 @@ export interface EmbeddedSignupResult {
   waba_id: string | null
   phone_number_id: string | null
   business_id: string | null
+  /** true quando o número continua no app WhatsApp Business (coexistência). O n8n confirma na Graph API. */
+  is_on_biz_app: boolean
   event: string | null
   session_info: unknown
+}
+
+interface SessionInfoData {
+  waba_id?: string
+  messaging_account_ids?: string[] | string
+  phone_number_id?: string
+  business_id?: string
+  is_on_biz_app?: boolean
+}
+
+/** v5 troca `waba_id` por `messaging_account_ids`; aceita os dois formatos. */
+function wabaIdFrom(info: SessionInfoData | null): string | null {
+  if (!info) return null
+  if (info.waba_id) return String(info.waba_id)
+  const ids = info.messaging_account_ids
+  if (Array.isArray(ids)) return ids.length ? String(ids[0]) : null
+  return ids ? String(ids) : null
 }
 
 export class EmbeddedSignupCancelled extends Error {
@@ -66,9 +85,11 @@ export class EmbeddedSignupCancelled extends Error {
 }
 
 /**
- * Abre o fluxo de Embedded Signup do WhatsApp.
+ * Abre o fluxo de Embedded Signup do WhatsApp (v5).
+ * No v5 a coexistência com o app WhatsApp Business vem ligada por padrão: quem já usa o app
+ * escaneia um QR code e continua usando o celular; quem não usa segue o fluxo de número novo.
  * Junta duas fontes: o `code` (callback do FB.login) e o session info
- * (postMessage WA_EMBEDDED_SIGNUP com waba_id / phone_number_id).
+ * (postMessage WA_EMBEDDED_SIGNUP com messaging_account_ids / phone_number_id).
  */
 export async function launchEmbeddedSignup(): Promise<EmbeddedSignupResult> {
   if (!config.fbEsConfigId) throw new Error('VITE_FB_ES_CONFIG_ID não configurado.')
@@ -76,7 +97,7 @@ export async function launchEmbeddedSignup(): Promise<EmbeddedSignupResult> {
 
   return new Promise((resolve, reject) => {
     let code: string | null = null
-    let info: { waba_id?: string; phone_number_id?: string; business_id?: string } | null = null
+    let info: SessionInfoData | null = null
     let event: string | null = null
     let rawInfo: unknown = null
     let settled = false
@@ -103,9 +124,10 @@ export async function launchEmbeddedSignup(): Promise<EmbeddedSignupResult> {
       cleanup()
       resolve({
         code: code!,
-        waba_id: info?.waba_id ?? null,
+        waba_id: wabaIdFrom(info),
         phone_number_id: info?.phone_number_id ?? null,
         business_id: info?.business_id ?? null,
+        is_on_biz_app: info?.is_on_biz_app === true || event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',
         event,
         session_info: rawInfo,
       })
@@ -158,10 +180,11 @@ export async function launchEmbeddedSignup(): Promise<EmbeddedSignupResult> {
         config_id: config.fbEsConfigId,
         response_type: 'code',
         override_default_response_type: true,
+        // Produtos e permissões vêm da configuração do Facebook Login for Business (config_id).
+        // v5: coexistência ligada por padrão; session info sempre enviado (sem sessionInfoVersion).
         extras: {
           setup: {},
-          featureType: '',
-          sessionInfoVersion: '3',
+          version: 'v5',
         },
       },
     )
