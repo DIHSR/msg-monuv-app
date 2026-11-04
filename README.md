@@ -49,6 +49,7 @@ npm install && npm run dev             # http://localhost:5173
 ```
 
 O passo a passo completo (Supabase, n8n, Meta App e AWS) está em **[docs/setup.md](docs/setup.md)**.
+O que ainda falta fazer, em ordem, está em **[docs/proximos-passos.md](docs/proximos-passos.md)**.
 
 ## Testes
 
