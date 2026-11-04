@@ -1,5 +1,9 @@
-// action "es.exchange" — finaliza o Embedded Signup
-// body: { code, waba_id?, phone_number_id?, business_id?, event? }
+// action "es.exchange" — finaliza o Embedded Signup (v5, coexistência ligada por padrão)
+// body: { code, waba_id?, phone_number_id?, business_id?, event?, is_on_biz_app? }
+//
+// Coexistência (número que continua no app WhatsApp Business): NÃO registra o número
+// (já está registrado) e, se MONUV_COEX_SYNC=true, pede contatos + histórico do app
+// (a Meta só aceita esse pedido uma vez, até 24 h após o onboarding).
 //
 // Ordem importa (auditoria run-1): toda checagem de posse acontece ANTES de qualquer
 // efeito colateral na Meta (subscribed_apps, register) ou no banco.
@@ -41,15 +45,31 @@ async function assertPhoneFree(phoneId, userId) {
   }
 }
 
-/** Registra o número na Cloud API (pula no modo coexistência). Retorna { registered, pin }. */
-async function registerPhone(phoneId, token, event) {
-  if (String(event || '').includes('WHATSAPP_BUSINESS_APP')) return { registered: true, pin: null };
+/** Registra o número na Cloud API com PIN aleatório. Retorna { registered, pin }. */
+async function registerPhone(phoneId, token) {
   const pin = String(require('crypto').randomInt(0, 1000000)).padStart(6, '0');
   const reg = await graph('POST', `/${phoneId}/register`, { token, body: { messaging_product: 'whatsapp', pin } });
   steps.push(step('register_phone', reg));
   const err = metaError(reg.response);
   const already = !!(err && /already registered/i.test(err.message || ''));
   return { registered: reg.ok || already, pin: reg.ok ? pin : null };
+}
+
+/** Coexistência: a Graph API é a fonte da verdade; a dica do navegador só vale se a Graph falhar. */
+function isCoexistence(phoneDetails) {
+  if (phoneDetails.ok) return phoneDetails.response.is_on_biz_app === true;
+  return body.is_on_biz_app === true || body.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING';
+}
+
+/** Pede à Meta os contatos e depois o histórico do app (nessa ordem, como a Meta recomenda). */
+async function requestCoexSync(phoneId, token) {
+  let any = false;
+  for (const syncType of ['smb_app_state_sync', 'history']) {
+    const r = await graph('POST', `/${phoneId}/smb_app_data`, { token, body: { messaging_product: 'whatsapp', sync_type: syncType } });
+    steps.push(step(`sync_${syncType}`, r));
+    any = any || r.ok;
+  }
+  return any;
 }
 
 try {
@@ -83,16 +103,17 @@ try {
   // 4) número livre (ou já deste usuário) — ainda sem nenhum efeito colateral
   await assertPhoneFree(phoneId, user.id);
 
-  // 5) efeitos na Meta: assina webhooks e registra o número
+  // 5) efeitos na Meta: assina webhooks
   const sub = await graph('POST', `/${wabaId}/subscribed_apps`, { token });
   steps.push(step('subscribe_app', sub));
-  const { registered, pin } = await registerPhone(phoneId, token, body.event);
 
-  // 6) detalhes
+  // 6) detalhes (dizem se o número está em coexistência) e registro só fora da coexistência
   const ph = await graph('GET', `/${phoneId}`, { token, qs: { fields: PHONE_FIELDS } });
   steps.push(step('phone_details', ph));
   const wb = await graph('GET', `/${wabaId}`, { token, qs: { fields: 'name' } });
   steps.push(step('waba_details', wb));
+  const coexistence = isCoexistence(ph);
+  const { registered, pin } = coexistence ? { registered: true, pin: null } : await registerPhone(phoneId, token);
 
   // 7) vínculo atômico que nunca troca o dono de um número
   const ready = registered && sub.ok;
@@ -104,6 +125,7 @@ try {
       waba_name: wb.ok ? wb.response.name : null,
       phone_number_id: phoneId,
       ...(ph.ok ? phoneColumns(ph.response) : {}),
+      is_on_biz_app: coexistence,
       status: ready ? 'connected' : 'pending',
       webhook_subscribed: sub.ok,
       last_error: ready ? null : { steps: steps.filter((s) => !s.ok).map((s) => s.name) },
@@ -116,7 +138,14 @@ try {
   if (pin) await rpc('wa_store_secret', { p_wa_account_id: account.id, p_kind: 'pin', p_value: pin });
   steps.push({ name: 'save_account', ok: true, response: { wa_account_id: account.id, status: account.status } });
 
-  return respond(200, { ok: true, account, steps });
+  // 8) coexistência: sincronização única, só depois do vínculo garantido
+  let saved = account;
+  if (coexistence && ENV.COEX_SYNC && await requestCoexSync(phoneId, token)) {
+    const rows = await sb('PATCH', `/rest/v1/wa_accounts?id=eq.${account.id}`, { coex_sync_requested_at: new Date().toISOString() });
+    saved = rows[0] || account;
+  }
+
+  return respond(200, { ok: true, account: saved, coexistence, steps });
 } catch (e) {
   return handleError(e, { steps });
 }

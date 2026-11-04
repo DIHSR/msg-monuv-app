@@ -10,6 +10,8 @@ const ENV = {
   APP_SECRET: $env.MONUV_META_APP_SECRET,
   VERIFY_TOKEN: $env.MONUV_META_VERIFY_TOKEN,
   GRAPH_VERSION: $env.MONUV_GRAPH_VERSION || 'v24.0',
+  // Coexistência: pedir à Meta contatos + histórico (até 180 dias) do app WhatsApp Business no onboarding
+  COEX_SYNC: String($env.MONUV_COEX_SYNC || '').toLowerCase() === 'true',
 };
 const GRAPH = `https://graph.facebook.com/${ENV.GRAPH_VERSION}`;
 const helpers = this.helpers;
@@ -190,7 +192,8 @@ function onlyDigits(v) {
 }
 
 // ---------------------------------------------------------------- Número de telefone
-const PHONE_FIELDS = 'display_phone_number,verified_name,quality_rating,code_verification_status,name_status,status';
+const PHONE_FIELDS =
+  'display_phone_number,verified_name,quality_rating,code_verification_status,name_status,status,is_on_biz_app,platform_type';
 
 /** Converte a resposta de GET /{phone_number_id} nas colunas de wa_accounts. */
 function phoneColumns(p) {
@@ -201,6 +204,8 @@ function phoneColumns(p) {
     name_status: p.name_status || null,
     code_verification_status: p.code_verification_status || null,
     phone_status: p.status || null,
+    is_on_biz_app: p.is_on_biz_app === true,
+    platform_type: p.platform_type || null,
   };
 }
 

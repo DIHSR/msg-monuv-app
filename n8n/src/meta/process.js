@@ -43,10 +43,16 @@ async function accountFor(wabaId, value) {
   return (await wabaAccounts(wabaId))[0] || null;
 }
 
+/** Texto curto para a lista de mensagens, qualquer que seja o tipo. */
+function previewText(m) {
+  return (m.text && m.text.body) || (m.button && m.button.text) || (m.interactive && JSON.stringify(m.interactive)) || `[${m.type}]`;
+}
+
+const tsIso = (ts) => new Date(ts ? Number(ts) * 1000 : Date.now()).toISOString();
+
 function inboundRow(acc, value, m) {
   const contact = (value.contacts || []).find((x) => x.wa_id === m.from);
   const name = contact && contact.profile && contact.profile.name ? `${contact.profile.name}: ` : '';
-  const text = (m.text && m.text.body) || (m.button && m.button.text) || (m.interactive && JSON.stringify(m.interactive)) || `[${m.type}]`;
   return {
     user_id: acc.user_id,
     wa_account_id: acc.id,
@@ -54,12 +60,77 @@ function inboundRow(acc, value, m) {
     from_number: m.from,
     to_number: value.metadata && value.metadata.display_phone_number,
     type: m.type,
-    body_preview: name + String(text).slice(0, 4000),
+    body_preview: name + String(previewText(m)).slice(0, 4000),
     response_payload: m,
     wa_message_id: m.id,
     status: 'received',
-    created_at: new Date(m.timestamp ? Number(m.timestamp) * 1000 : Date.now()).toISOString(),
+    created_at: tsIso(m.timestamp),
   };
+}
+
+/** Coexistência: mensagem que a empresa enviou pelo app WhatsApp Business (ou aparelho vinculado). */
+function echoRow(acc, m) {
+  return {
+    user_id: acc.user_id,
+    wa_account_id: acc.id,
+    direction: 'outbound',
+    from_number: m.from,
+    to_number: m.to,
+    type: m.type,
+    body_preview: String(previewText(m)).slice(0, 4000),
+    response_payload: m,
+    wa_message_id: m.id,
+    status: 'sent',
+    created_at: tsIso(m.timestamp),
+  };
+}
+
+const HISTORY_STATUS = { SENT: 'sent', DELIVERED: 'delivered', READ: 'read', PLAYED: 'read', ERROR: 'failed', FAILED: 'failed' };
+
+/** Coexistência: mensagem do histórico do app. thread.id é o número do cliente. */
+function historyRow(acc, value, thread, m) {
+  const fromCustomer = String(m.from) === String(thread.id);
+  const business = value.metadata && value.metadata.display_phone_number;
+  const ctx = String((m.history_context && m.history_context.status) || '').toUpperCase();
+  return {
+    user_id: acc.user_id,
+    wa_account_id: acc.id,
+    direction: fromCustomer ? 'inbound' : 'outbound',
+    from_number: fromCustomer ? m.from : m.from || business,
+    to_number: fromCustomer ? business : thread.id,
+    type: m.type,
+    body_preview: String(previewText(m)).slice(0, 4000),
+    response_payload: m,
+    wa_message_id: m.id,
+    status: fromCustomer ? 'received' : HISTORY_STATUS[ctx] || 'sent',
+    created_at: tsIso(m.timestamp),
+  };
+}
+
+async function insertMessages(rows) {
+  if (!rows.length) return;
+  await sb('POST', '/rest/v1/messages?on_conflict=wa_message_id', rows, { Prefer: 'resolution=ignore-duplicates,return=minimal' });
+}
+
+/** Lotes grandes (histórico, contatos) não vão inteiros para webhook_events: só um resumo, sem dados pessoais. */
+function auditPayload(entry, change) {
+  const v = change.value || {};
+  if (change.field === 'history') {
+    return {
+      entry_id: entry.id,
+      field: 'history',
+      chunks: (v.history || []).map((h) => ({
+        metadata: h.metadata || null,
+        threads: (h.threads || []).length,
+        messages: (h.threads || []).reduce((n, t) => n + (t.messages || []).length, 0),
+        errors: h.errors || null,
+      })),
+    };
+  }
+  if (change.field === 'smb_app_state_sync') {
+    return { entry_id: entry.id, field: 'smb_app_state_sync', items: (v.state_sync || []).length };
+  }
+  return { entry_id: entry.id, change };
 }
 
 /** PATCH em templates restrito às contas da WABA do envelope. */
@@ -86,9 +157,7 @@ async function handleChange(wabaId, field, value, acc, results) {
       results.push({ type: 'status', id: s.id, status: s.status, r });
     }
     if (acc && Array.isArray(value.messages) && value.messages.length) {
-      await sb('POST', '/rest/v1/messages?on_conflict=wa_message_id', value.messages.map((m) => inboundRow(acc, value, m)), {
-        Prefer: 'resolution=ignore-duplicates,return=minimal',
-      });
+      await insertMessages(value.messages.map((m) => inboundRow(acc, value, m)));
       results.push({ type: 'inbound', count: value.messages.length });
     }
   } else if (field === 'message_template_status_update') {
@@ -100,12 +169,41 @@ async function handleChange(wabaId, field, value, acc, results) {
   } else if (field === 'message_template_quality_update') {
     await patchTemplate(wabaId, value.message_template_id, { quality_score: value.new_quality_score || null });
     results.push({ type: 'template_quality', id: value.message_template_id });
-  } else if (field === 'account_update' && value.event === 'PARTNER_REMOVED' && wabaId) {
-    // cliente removeu o app na Meta → contas da WABA ficam desconectadas (e sem token, ver n8n_user_context)
-    await sb('PATCH', `/rest/v1/wa_accounts?waba_id=eq.${encodeURIComponent(wabaId)}`, { status: 'disconnected', webhook_subscribed: false }, MINIMAL);
-    results.push({ type: 'partner_removed', waba_id: wabaId });
+  } else if (field === 'smb_message_echoes') {
+    if (acc) {
+      const echoes = value.message_echoes || [];
+      await insertMessages(echoes.map((m) => echoRow(acc, m)));
+      results.push({ type: 'echo', count: echoes.length });
+    }
+  } else if (field === 'history') {
+    if (acc) {
+      const rows = [];
+      for (const chunk of value.history || []) {
+        for (const thread of chunk.threads || []) {
+          for (const m of thread.messages || []) rows.push(historyRow(acc, value, thread, m));
+        }
+      }
+      await insertMessages(rows);
+      results.push({ type: 'history', count: rows.length });
+    }
+  } else if (field === 'smb_app_state_sync') {
+    // contatos do app: hoje o Monuv não tem agenda — só registramos que chegou (sem dados pessoais)
+    results.push({ type: 'contacts_sync', count: (value.state_sync || []).length });
+  } else if (field === 'account_update' && DISCONNECT_EVENTS.has(value.event) && wabaId) {
+    // PARTNER_REMOVED: cliente removeu o app (na Meta ou no app WhatsApp Business).
+    // ACCOUNT_OFFBOARDED: o número saiu da coexistência (troca de aparelho, novo registro no app).
+    // Em ambos a conta fica desconectada (e sem token, ver n8n_user_context) até reconectar pelo Embedded Signup.
+    await sb(
+      'PATCH',
+      `/rest/v1/wa_accounts?waba_id=eq.${encodeURIComponent(wabaId)}`,
+      { status: 'disconnected', webhook_subscribed: false, last_error: { event: value.event, disconnection_info: value.disconnection_info || null } },
+      MINIMAL,
+    );
+    results.push({ type: 'disconnected', event: value.event, waba_id: wabaId });
   }
 }
+
+const DISCONNECT_EVENTS = new Set(['PARTNER_REMOVED', 'ACCOUNT_OFFBOARDED']);
 
 const results = [];
 for (const entry of (payload && payload.entry) || []) {
@@ -129,7 +227,7 @@ for (const entry of (payload && payload.entry) || []) {
         field: change.field,
         waba_id: wabaId || null,
         user_id: acc ? acc.user_id : null,
-        payload: { entry_id: entry.id, change },
+        payload: auditPayload(entry, change),
         processed: !error,
         error,
       },

@@ -57,6 +57,13 @@ Execuções sobrepostas não duplicam envios. Se uma execução cai no meio, os 
 - POST com assinatura inválida grava só tamanho e SHA-256;
 - o evento só é atribuído à conta cuja WABA bate com o envelope assinado.
 
+**Coexistência** (número que continua no app WhatsApp Business):
+- o front abre o Embedded Signup v5, em que a coexistência vem ligada por padrão;
+- `es.exchange` lê `is_on_biz_app` do número na Graph API (a dica do navegador só vale se a Graph falhar). Em coexistência o número **não** é registrado, porque já está;
+- com `MONUV_COEX_SYNC=true`, depois do vínculo, pede contatos e histórico (`POST /{phone}/smb_app_data`), uma única vez;
+- webhook: `smb_message_echoes` e `history` viram linhas em `messages`. `smb_app_state_sync` (contatos) não é persistido. `account_update` `PARTNER_REMOVED`/`ACCOUNT_OFFBOARDED` desconecta a conta;
+- `webhook_events` guarda só um resumo dos lotes de histórico e contatos, sem o conteúdo.
+
 Para testar o webhook publicado:
 
 ```bash
