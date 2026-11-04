@@ -38,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, email, full_name, company_name, is_demo, plan, trial_ends_at, daily_send_limit, can_use_app')
+        .select('id, email, full_name, company_name, is_demo, plan, daily_send_limit, can_use_app')
         .eq('id', userId!)
         .single()
       if (error) throw error

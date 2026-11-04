@@ -1,24 +1,27 @@
-// Comportamento base do schema: profiles/trial, usuário demo, Vault, status de mensagem, RLS.
+// Comportamento base do schema: profiles/acesso, usuário demo, Vault, status de mensagem, RLS.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { freshDb } from './harness.mjs'
 
-test('novo usuário ganha profile em trial de 14 dias', async () => {
+test('novo usuário do Monuv Mensagens ganha profile ativo, sem prazo', async () => {
   const { one, newUser } = await freshDb()
   const u = await newUser('cliente@x.com')
   const p = await one(`select plan, public.can_use_app(profiles) as can from public.profiles where id=$1`, [u])
-  assert.equal(p.plan, 'trial')
+  assert.equal(p.plan, 'active')
   assert.equal(p.can, true)
 })
 
-test('trial expirado bloqueia; demo permanente não expira', async () => {
+test('suspenso bloqueia; demo permanente não expira; trial não existe', async () => {
   const { q, one, newUser } = await freshDb()
   const u = await newUser('a@x.com')
   const demo = await newUser('revisor@x.com')
-  await q(`update public.profiles set trial_ends_at = now() - interval '1 day' where id=$1`, [u])
-  await q(`update public.profiles set is_demo=true, plan='permanent', trial_ends_at=null where id=$1`, [demo])
+  await q(`update public.profiles set plan = 'suspended' where id=$1`, [u])
+  await q(`update public.profiles set is_demo=true, plan='permanent' where id=$1`, [demo])
   assert.equal((await one(`select public.can_use_app(profiles) c from public.profiles where id=$1`, [u])).c, false)
   assert.equal((await one(`select public.can_use_app(profiles) c from public.profiles where id=$1`, [demo])).c, true)
+  await assert.rejects(q(`update public.profiles set plan = 'trial' where id=$1`, [u]), /profiles_plan_check/)
+  const col = await one(`select count(*)::int c from information_schema.columns where table_name='profiles' and column_name='trial_ends_at'`)
+  assert.equal(col.c, 0)
 })
 
 test('demo não pode trocar senha/e-mail nem ser excluído, exceto com bypass consciente', async () => {

@@ -29,7 +29,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
           title="Acesso indisponível"
           description={
             profile
-              ? 'Seu período de teste terminou ou a conta está suspensa. Fale com a equipe Monuv para reativar.'
+              ? 'Seu acesso ao Monuv Mensagens está suspenso. Fale com a equipe Monuv para reativar.'
               : 'Este login não tem acesso ao Monuv Mensagens. Fale com a equipe Monuv.'
           }
           action={

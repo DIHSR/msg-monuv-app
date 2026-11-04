@@ -72,7 +72,7 @@ if (!user) {
   console.log(`• Usuário já existe: ${user.id} (senha NÃO alterada — demo é protegido por trigger)`);
 }
 
-// Marca como demo permanente (fora de qualquer trial). Upsert: o usuário pode ter sido criado
+// Marca como demo permanente (protegido por trigger). Upsert: o usuário pode ter sido criado
 // antes do trigger do Monuv (projeto compartilhado) e não ter perfil ainda.
 await call(
   'POST',
@@ -84,7 +84,6 @@ await call(
     company_name: DEMO_COMPANY,
     is_demo: true,
     plan: 'permanent',
-    trial_ends_at: null,
     daily_send_limit: DAILY_LIMIT,
   },
   { Prefer: 'resolution=merge-duplicates,return=minimal' },
@@ -97,4 +96,4 @@ const anonCheck = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password
   body: JSON.stringify({ email: DEMO_EMAIL, password: DEMO_PASSWORD }),
 });
 console.log(anonCheck.ok ? '✔ Login de teste OK' : `✖ Login de teste falhou (${anonCheck.status})`);
-console.log('✔ Profile marcado como is_demo=true, plan=permanent, trial_ends_at=null');
+console.log('✔ Profile marcado como is_demo=true, plan=permanent');

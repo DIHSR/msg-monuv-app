@@ -12,9 +12,10 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
    `…0001_schema.sql` → `…0002_security_fixes.sql` → `…0003_campaign_queue.sql` → `…0004_coexistence.sql` → `…0005_shared_project.sql`.
    - Se a `0001` já foi aplicada (as tabelas `wa_accounts`, `templates` etc. existem), **comece pela `0002`**.
    - **Não use `supabase db push`** neste projeto: o histórico de migrations é compartilhado com os outros sistemas.
-2. **Quem acessa o Monuv Mensagens:** ter login no projeto **não** dá acesso. Só tem acesso quem tem perfil em `public.profiles`:
-   - usuário que já existe (de outro sistema): `select public.grant_msg_access('pessoa@monuv.com.br');` (trial de 14 dias) ou `…, 'active')` (sem prazo);
-   - usuário novo só do Monuv Mensagens: crie pela Admin API com `app_metadata: { "monuv_msg": true }`. O trigger cria o perfil em trial;
+2. **Quem acessa o Monuv Mensagens:** uso interno da Monuv, **sem cobrança e sem trial**. Ter login no projeto **não** dá acesso: só entra quem tem perfil em `public.profiles` com plano `active` (ou `permanent`, o demo do revisor).
+   - liberar um usuário que já existe (de outro sistema): `select public.grant_msg_access('pessoa@monuv.com.br');`
+   - cortar o acesso (o login dele continua valendo nos outros sistemas): `select public.revoke_msg_access('pessoa@monuv.com.br');`
+   - usuário novo só do Monuv Mensagens: crie pela Admin API com `app_metadata: { "monuv_msg": true }`. O trigger cria o perfil `active`;
    - demo do revisor: `supabase/scripts/create-demo-user.mjs` (já marca `monuv_msg` e cria o perfil `permanent`).
    - Usuários de outros sistemas sem perfil veem "Este login não tem acesso ao Monuv Mensagens".
 3. **Authentication → Sign In / Providers:** **não precisa mexer.** O "Allow new users to sign up" vale para todos os sistemas do projeto; mesmo ligado, quem se cadastra sozinho não ganha perfil no Monuv Mensagens.
@@ -116,7 +117,7 @@ DEMO_PASSWORD='senha-forte' \
 node supabase/scripts/create-demo-user.mjs
 ```
 
-- O profile fica com `is_demo=true`, `plan='permanent'`, `trial_ends_at=null` e `daily_send_limit=50`.
+- O profile fica com `is_demo=true`, `plan='permanent'` e `daily_send_limit=50`.
 - **Senha, e-mail e exclusão ficam bloqueados por trigger.** Para alterar conscientemente:
   ```sql
   begin; set local app.allow_demo_change = 'on';

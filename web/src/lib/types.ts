@@ -1,4 +1,5 @@
-export type Plan = 'trial' | 'active' | 'permanent' | 'suspended'
+/** Uso interno da Monuv: sem cobrança e sem trial. `permanent` = demo do revisor da Meta. */
+export type Plan = 'active' | 'permanent' | 'suspended'
 
 export interface Profile {
   id: string
@@ -7,7 +8,6 @@ export interface Profile {
   company_name: string | null
   is_demo: boolean
   plan: Plan
-  trial_ends_at: string | null
   daily_send_limit: number | null
   can_use_app: boolean
 }
