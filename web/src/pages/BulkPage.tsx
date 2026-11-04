@@ -172,8 +172,6 @@ export function BulkPage() {
           name: name.trim(),
           template_name: template.name,
           template_language: template.language,
-          status: 'draft',
-          total: recipients.length,
         })
         .select()
         .single()

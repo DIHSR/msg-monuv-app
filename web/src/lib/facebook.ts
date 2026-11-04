@@ -10,6 +10,9 @@ declare global {
 
 let sdkPromise: Promise<any> | null = null
 
+/** Origens que podem enviar o resultado do Embedded Signup (allowlist exata, só HTTPS). */
+const ES_ORIGINS = new Set(['https://www.facebook.com', 'https://web.facebook.com', 'https://business.facebook.com'])
+
 export function loadFacebookSdk(): Promise<any> {
   if (sdkPromise) return sdkPromise
   sdkPromise = new Promise((resolve, reject) => {
@@ -116,7 +119,7 @@ export async function launchEmbeddedSignup(): Promise<EmbeddedSignupResult> {
     }
 
     function onMessage(e: MessageEvent) {
-      if (typeof e.origin !== 'string' || !/(^|\.)facebook\.com$/.test(new URL(e.origin).hostname)) return
+      if (!ES_ORIGINS.has(e.origin)) return
       let data: any = e.data
       if (typeof data === 'string') {
         try {
