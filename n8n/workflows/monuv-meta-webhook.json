@@ -1,0 +1,177 @@
+{
+  "name": "Monuv - Meta Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "monuv/meta-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a136be58-6e4e-43b6-a47f-d62ee6779b74",
+      "name": "Webhook GET (verificação)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -160
+      ],
+      "webhookId": "b4882565-ea94-437b-aa9c-dd47f4868bb9"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================================\n// monuv lib — gerado por n8n/build.mjs a partir de n8n/src/_lib.js.\n// NÃO edite no n8n: edite no repositório e reimporte o workflow.\n// Requer no n8n: N8N_BLOCK_ENV_ACCESS_IN_NODE=false\n// ============================================================================\nconst ENV = {\n  SUPABASE_URL: String($env.MONUV_SUPABASE_URL || '').replace(/\\/+$/, ''),\n  SERVICE_KEY: $env.MONUV_SUPABASE_SERVICE_ROLE_KEY,\n  APP_ID: $env.MONUV_META_APP_ID,\n  APP_SECRET: $env.MONUV_META_APP_SECRET,\n  VERIFY_TOKEN: $env.MONUV_META_VERIFY_TOKEN,\n  GRAPH_VERSION: $env.MONUV_GRAPH_VERSION || 'v24.0',\n};\nconst GRAPH = `https://graph.facebook.com/${ENV.GRAPH_VERSION}`;\nconst helpers = this.helpers;\n\nclass HttpError extends Error {\n  constructor(status, code, message, extra = {}) {\n    super(message);\n    this.status = status;\n    this.code = code;\n    this.extra = extra;\n  }\n}\n\nfunction respond(status, body) {\n  return [{ json: { status, body } }];\n}\n\nfunction handleError(e, extra = {}) {\n  if (e instanceof HttpError) {\n    return respond(e.status, { ok: false, error: { code: e.code, message: e.message }, ...extra, ...e.extra });\n  }\n  return respond(500, { ok: false, error: { code: 'internal', message: String((e && e.message) || e) }, ...extra });\n}\n\nasync function http(opts) {\n  const res = await helpers.httpRequest({\n    json: true,\n    ignoreHttpStatusErrors: true,\n    returnFullResponse: true,\n    timeout: 30000,\n    ...opts,\n  });\n  let body = res.body;\n  if (typeof body === 'string') {\n    try { body = JSON.parse(body); } catch (_) { /* texto */ }\n  }\n  return { status: res.statusCode, body };\n}\n\n// ---------------------------------------------------------------- Supabase\nasync function sb(method, path, body, headers = {}) {\n  if (!ENV.SUPABASE_URL || !ENV.SERVICE_KEY) {\n    throw new HttpError(500, 'config', 'MONUV_SUPABASE_URL / MONUV_SUPABASE_SERVICE_ROLE_KEY não configurados no n8n.');\n  }\n  const r = await http({\n    method,\n    url: ENV.SUPABASE_URL + path,\n    headers: {\n      apikey: ENV.SERVICE_KEY,\n      Authorization: `Bearer ${ENV.SERVICE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=representation',\n      ...headers,\n    },\n    body,\n  });\n  if (r.status >= 300) {\n    throw new HttpError(502, 'supabase_error', `Supabase ${method} ${path.split('?')[0]} → ${r.status}`, { supabase: r.body });\n  }\n  return r.body;\n}\n\nasync function rpc(fn, args) {\n  return sb('POST', `/rest/v1/rpc/${fn}`, args);\n}\n\n/** Valida o JWT do usuário (Authorization: Bearer <access_token do Supabase>). */\nasync function authUser(req) {\n  const h = req.headers || {};\n  const authz = h.authorization || h.Authorization || '';\n  const jwt = String(authz).replace(/^Bearer\\s+/i, '').trim();\n  if (!jwt) throw new HttpError(401, 'unauthorized', 'Token de acesso ausente.');\n  const r = await http({\n    method: 'GET',\n    url: `${ENV.SUPABASE_URL}/auth/v1/user`,\n    headers: { apikey: ENV.SERVICE_KEY, Authorization: `Bearer ${jwt}` },\n  });\n  if (r.status !== 200 || !r.body || !r.body.id) throw new HttpError(401, 'unauthorized', 'Sessão inválida ou expirada.');\n  return r.body;\n}\n\n/** Contexto do usuário (profile + conta WhatsApp + token). Nunca devolva `token` na resposta. */\nasync function userContext(userId, waAccountId, { requireAccount = true } = {}) {\n  const ctx = await rpc('n8n_user_context', { p_user_id: userId, p_wa_account_id: waAccountId || null });\n  if (!ctx || !ctx.ok) throw new HttpError(403, 'no_profile', 'Perfil não encontrado.');\n  if (!ctx.can_use_app) throw new HttpError(403, 'plan_expired', 'Seu acesso está suspenso ou o período de teste terminou.');\n  if (requireAccount) {\n    if (!ctx.account) throw new HttpError(404, 'no_account', 'Nenhum número do WhatsApp conectado.');\n    if (!ctx.token) throw new HttpError(409, 'no_token', 'Conexão sem token válido. Reconecte o número.');\n  }\n  return ctx;\n}\n\n// ---------------------------------------------------------------- Graph API\n/**\n * Chamada à Graph API. O token vai no header (não na URL), então `request` pode ser\n * devolvido ao front com segurança para o painel JSON.\n */\nasync function graph(method, path, { token, body, qs } = {}) {\n  const url = GRAPH + path;\n  const r = await http({\n    method,\n    url,\n    qs,\n    body,\n    headers: token ? { Authorization: `Bearer ${token}` } : {},\n  });\n  const request = { method, url: url + (qs ? '?' + new URLSearchParams(qs).toString() : '') };\n  if (body !== undefined) request.body = body;\n  return { ok: r.status >= 200 && r.status < 300, http_status: r.status, request, response: r.body };\n}\n\nfunction metaError(resp) {\n  const e = resp && resp.error;\n  if (!e) return null;\n  return {\n    message: e.error_user_msg || e.message,\n    code: e.code,\n    subcode: e.error_subcode,\n    type: e.type,\n    fbtrace_id: e.fbtrace_id,\n    details: e.error_data && e.error_data.details,\n  };\n}\n\nfunction maskSecrets(obj) {\n  const SECRET_KEYS = ['access_token', 'client_secret', 'input_token', 'pin'];\n  const walk = (v) => {\n    if (Array.isArray(v)) return v.map(walk);\n    if (v && typeof v === 'object') {\n      const o = {};\n      for (const [k, val] of Object.entries(v)) {\n        o[k] = SECRET_KEYS.includes(k) && typeof val === 'string' ? `${val.slice(0, 6)}…(oculto)` : walk(val);\n      }\n      return o;\n    }\n    if (typeof v === 'string') {\n      return v.replace(/(client_secret|code|access_token|input_token)=([^&\\s]+)/g, (_, k) => `${k}=***`);\n    }\n    return v;\n  };\n  return walk(obj);\n}\n\nfunction step(name, g) {\n  return {\n    name,\n    ok: g.ok,\n    http_status: g.http_status,\n    request: maskSecrets(g.request),\n    response: maskSecrets(g.response),\n  };\n}\n\nfunction onlyDigits(v) {\n  return String(v || '').replace(/\\D/g, '');\n}\n\n/** Monta o objeto `template` da Cloud API a partir dos parâmetros enviados pelo front. */\nfunction buildTemplate(name, language, params = {}) {\n  const named = params.parameter_format === 'NAMED';\n  const textParam = (p) =>\n    named ? { type: 'text', parameter_name: p.key, text: String(p.value ?? '') } : { type: 'text', text: String(p.value ?? '') };\n  const components = [];\n\n  if (params.header_media && params.header_media.link) {\n    const t = params.header_media.type;\n    const media = { link: params.header_media.link };\n    if (t === 'document' && params.header_media.filename) media.filename = params.header_media.filename;\n    components.push({ type: 'header', parameters: [{ type: t, [t]: media }] });\n  } else if (Array.isArray(params.header) && params.header.length) {\n    components.push({ type: 'header', parameters: params.header.map(textParam) });\n  }\n  if (Array.isArray(params.body) && params.body.length) {\n    components.push({ type: 'body', parameters: params.body.map(textParam) });\n  }\n  for (const b of params.buttons || []) {\n    components.push({\n      type: 'button',\n      sub_type: 'url',\n      index: String(b.index),\n      parameters: [{ type: 'text', text: String(b.value ?? '') }],\n    });\n  }\n  const tpl = { name, language: { code: language } };\n  if (components.length) tpl.components = components;\n  return tpl;\n}\n// ============================================================================\n\n// GET monuv/meta-webhook — handshake de verificação da Meta\n// Responde hub.challenge (texto puro) se hub.verify_token conferir.\nconst req = $input.first().json;\nconst q = req.query || {};\nconst mode = q['hub.mode'] ?? (q.hub && q.hub.mode);\nconst token = q['hub.verify_token'] ?? (q.hub && q.hub.verify_token);\nconst challenge = q['hub.challenge'] ?? (q.hub && q.hub.challenge);\n\nif (mode === 'subscribe' && ENV.VERIFY_TOKEN && token === ENV.VERIFY_TOKEN) {\n  return [{ json: { status: 200, body: String(challenge ?? '') } }];\n}\nreturn [{ json: { status: 403, body: 'Forbidden' } }];\n"
+      },
+      "id": "61866018-313c-4d43-a54c-0264ddf7f718",
+      "name": "Verificar token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "id": "da62461c-6be0-4f54-a966-8644a8d9de17",
+      "name": "Responder challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "monuv/meta-webhook",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "e4bbe82b-da43-4269-a2be-f6c1eef71872",
+      "name": "Webhook POST (eventos)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        80
+      ],
+      "webhookId": "7332d53d-c0cc-4b67-a7e1-250548e57093"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================================\n// monuv lib — gerado por n8n/build.mjs a partir de n8n/src/_lib.js.\n// NÃO edite no n8n: edite no repositório e reimporte o workflow.\n// Requer no n8n: N8N_BLOCK_ENV_ACCESS_IN_NODE=false\n// ============================================================================\nconst ENV = {\n  SUPABASE_URL: String($env.MONUV_SUPABASE_URL || '').replace(/\\/+$/, ''),\n  SERVICE_KEY: $env.MONUV_SUPABASE_SERVICE_ROLE_KEY,\n  APP_ID: $env.MONUV_META_APP_ID,\n  APP_SECRET: $env.MONUV_META_APP_SECRET,\n  VERIFY_TOKEN: $env.MONUV_META_VERIFY_TOKEN,\n  GRAPH_VERSION: $env.MONUV_GRAPH_VERSION || 'v24.0',\n};\nconst GRAPH = `https://graph.facebook.com/${ENV.GRAPH_VERSION}`;\nconst helpers = this.helpers;\n\nclass HttpError extends Error {\n  constructor(status, code, message, extra = {}) {\n    super(message);\n    this.status = status;\n    this.code = code;\n    this.extra = extra;\n  }\n}\n\nfunction respond(status, body) {\n  return [{ json: { status, body } }];\n}\n\nfunction handleError(e, extra = {}) {\n  if (e instanceof HttpError) {\n    return respond(e.status, { ok: false, error: { code: e.code, message: e.message }, ...extra, ...e.extra });\n  }\n  return respond(500, { ok: false, error: { code: 'internal', message: String((e && e.message) || e) }, ...extra });\n}\n\nasync function http(opts) {\n  const res = await helpers.httpRequest({\n    json: true,\n    ignoreHttpStatusErrors: true,\n    returnFullResponse: true,\n    timeout: 30000,\n    ...opts,\n  });\n  let body = res.body;\n  if (typeof body === 'string') {\n    try { body = JSON.parse(body); } catch (_) { /* texto */ }\n  }\n  return { status: res.statusCode, body };\n}\n\n// ---------------------------------------------------------------- Supabase\nasync function sb(method, path, body, headers = {}) {\n  if (!ENV.SUPABASE_URL || !ENV.SERVICE_KEY) {\n    throw new HttpError(500, 'config', 'MONUV_SUPABASE_URL / MONUV_SUPABASE_SERVICE_ROLE_KEY não configurados no n8n.');\n  }\n  const r = await http({\n    method,\n    url: ENV.SUPABASE_URL + path,\n    headers: {\n      apikey: ENV.SERVICE_KEY,\n      Authorization: `Bearer ${ENV.SERVICE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=representation',\n      ...headers,\n    },\n    body,\n  });\n  if (r.status >= 300) {\n    throw new HttpError(502, 'supabase_error', `Supabase ${method} ${path.split('?')[0]} → ${r.status}`, { supabase: r.body });\n  }\n  return r.body;\n}\n\nasync function rpc(fn, args) {\n  return sb('POST', `/rest/v1/rpc/${fn}`, args);\n}\n\n/** Valida o JWT do usuário (Authorization: Bearer <access_token do Supabase>). */\nasync function authUser(req) {\n  const h = req.headers || {};\n  const authz = h.authorization || h.Authorization || '';\n  const jwt = String(authz).replace(/^Bearer\\s+/i, '').trim();\n  if (!jwt) throw new HttpError(401, 'unauthorized', 'Token de acesso ausente.');\n  const r = await http({\n    method: 'GET',\n    url: `${ENV.SUPABASE_URL}/auth/v1/user`,\n    headers: { apikey: ENV.SERVICE_KEY, Authorization: `Bearer ${jwt}` },\n  });\n  if (r.status !== 200 || !r.body || !r.body.id) throw new HttpError(401, 'unauthorized', 'Sessão inválida ou expirada.');\n  return r.body;\n}\n\n/** Contexto do usuário (profile + conta WhatsApp + token). Nunca devolva `token` na resposta. */\nasync function userContext(userId, waAccountId, { requireAccount = true } = {}) {\n  const ctx = await rpc('n8n_user_context', { p_user_id: userId, p_wa_account_id: waAccountId || null });\n  if (!ctx || !ctx.ok) throw new HttpError(403, 'no_profile', 'Perfil não encontrado.');\n  if (!ctx.can_use_app) throw new HttpError(403, 'plan_expired', 'Seu acesso está suspenso ou o período de teste terminou.');\n  if (requireAccount) {\n    if (!ctx.account) throw new HttpError(404, 'no_account', 'Nenhum número do WhatsApp conectado.');\n    if (!ctx.token) throw new HttpError(409, 'no_token', 'Conexão sem token válido. Reconecte o número.');\n  }\n  return ctx;\n}\n\n// ---------------------------------------------------------------- Graph API\n/**\n * Chamada à Graph API. O token vai no header (não na URL), então `request` pode ser\n * devolvido ao front com segurança para o painel JSON.\n */\nasync function graph(method, path, { token, body, qs } = {}) {\n  const url = GRAPH + path;\n  const r = await http({\n    method,\n    url,\n    qs,\n    body,\n    headers: token ? { Authorization: `Bearer ${token}` } : {},\n  });\n  const request = { method, url: url + (qs ? '?' + new URLSearchParams(qs).toString() : '') };\n  if (body !== undefined) request.body = body;\n  return { ok: r.status >= 200 && r.status < 300, http_status: r.status, request, response: r.body };\n}\n\nfunction metaError(resp) {\n  const e = resp && resp.error;\n  if (!e) return null;\n  return {\n    message: e.error_user_msg || e.message,\n    code: e.code,\n    subcode: e.error_subcode,\n    type: e.type,\n    fbtrace_id: e.fbtrace_id,\n    details: e.error_data && e.error_data.details,\n  };\n}\n\nfunction maskSecrets(obj) {\n  const SECRET_KEYS = ['access_token', 'client_secret', 'input_token', 'pin'];\n  const walk = (v) => {\n    if (Array.isArray(v)) return v.map(walk);\n    if (v && typeof v === 'object') {\n      const o = {};\n      for (const [k, val] of Object.entries(v)) {\n        o[k] = SECRET_KEYS.includes(k) && typeof val === 'string' ? `${val.slice(0, 6)}…(oculto)` : walk(val);\n      }\n      return o;\n    }\n    if (typeof v === 'string') {\n      return v.replace(/(client_secret|code|access_token|input_token)=([^&\\s]+)/g, (_, k) => `${k}=***`);\n    }\n    return v;\n  };\n  return walk(obj);\n}\n\nfunction step(name, g) {\n  return {\n    name,\n    ok: g.ok,\n    http_status: g.http_status,\n    request: maskSecrets(g.request),\n    response: maskSecrets(g.response),\n  };\n}\n\nfunction onlyDigits(v) {\n  return String(v || '').replace(/\\D/g, '');\n}\n\n/** Monta o objeto `template` da Cloud API a partir dos parâmetros enviados pelo front. */\nfunction buildTemplate(name, language, params = {}) {\n  const named = params.parameter_format === 'NAMED';\n  const textParam = (p) =>\n    named ? { type: 'text', parameter_name: p.key, text: String(p.value ?? '') } : { type: 'text', text: String(p.value ?? '') };\n  const components = [];\n\n  if (params.header_media && params.header_media.link) {\n    const t = params.header_media.type;\n    const media = { link: params.header_media.link };\n    if (t === 'document' && params.header_media.filename) media.filename = params.header_media.filename;\n    components.push({ type: 'header', parameters: [{ type: t, [t]: media }] });\n  } else if (Array.isArray(params.header) && params.header.length) {\n    components.push({ type: 'header', parameters: params.header.map(textParam) });\n  }\n  if (Array.isArray(params.body) && params.body.length) {\n    components.push({ type: 'body', parameters: params.body.map(textParam) });\n  }\n  for (const b of params.buttons || []) {\n    components.push({\n      type: 'button',\n      sub_type: 'url',\n      index: String(b.index),\n      parameters: [{ type: 'text', text: String(b.value ?? '') }],\n    });\n  }\n  const tpl = { name, language: { code: language } };\n  if (components.length) tpl.components = components;\n  return tpl;\n}\n// ============================================================================\n\n// POST monuv/meta-webhook — valida X-Hub-Signature-256\n//\n// A assinatura é HMAC-SHA256 do CORPO BRUTO (bytes exatos) com o App Secret.\n// NÃO use JSON.stringify(body): a Meta escapa acentos como é e o hash não bate.\n// Requer: opção \"Raw Body\" ligada no Webhook node + NODE_FUNCTION_ALLOW_BUILTIN=crypto.\nconst crypto = require('crypto');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst header = String(headers['x-hub-signature-256'] || '');\n\nlet raw = null;\nlet reason = null;\ntry {\n  raw = await helpers.getBinaryDataBuffer(0, 'data');\n} catch (_) {\n  reason = 'raw_body_missing';\n}\n\nlet valid = false;\nif (!ENV.APP_SECRET) {\n  reason = 'app_secret_missing';\n} else if (!header.startsWith('sha256=')) {\n  reason = reason || 'signature_header_missing';\n} else if (raw) {\n  const expected = Buffer.from(crypto.createHmac('sha256', ENV.APP_SECRET).update(raw).digest('hex'), 'utf8');\n  const received = Buffer.from(header.slice('sha256='.length), 'utf8');\n  valid = expected.length === received.length && crypto.timingSafeEqual(expected, received);\n  if (!valid) reason = 'signature_mismatch';\n}\n\nlet payload = null;\ntry {\n  payload = raw ? JSON.parse(raw.toString('utf8')) : item.json.body || null;\n} catch (_) {\n  payload = item.json.body || null;\n}\n\nreturn [\n  {\n    json: {\n      status: valid ? 200 : 401,\n      body: valid ? 'EVENT_RECEIVED' : 'Invalid signature',\n      valid,\n      reason,\n      payload,\n    },\n  },\n];\n"
+      },
+      "id": "0ecf93ed-a63b-44b3-a1b7-8814b6394939",
+      "name": "Validar assinatura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "id": "efa09679-9612-4195-afa5-5717e1f275a5",
+      "name": "Responder 200/401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================================\n// monuv lib — gerado por n8n/build.mjs a partir de n8n/src/_lib.js.\n// NÃO edite no n8n: edite no repositório e reimporte o workflow.\n// Requer no n8n: N8N_BLOCK_ENV_ACCESS_IN_NODE=false\n// ============================================================================\nconst ENV = {\n  SUPABASE_URL: String($env.MONUV_SUPABASE_URL || '').replace(/\\/+$/, ''),\n  SERVICE_KEY: $env.MONUV_SUPABASE_SERVICE_ROLE_KEY,\n  APP_ID: $env.MONUV_META_APP_ID,\n  APP_SECRET: $env.MONUV_META_APP_SECRET,\n  VERIFY_TOKEN: $env.MONUV_META_VERIFY_TOKEN,\n  GRAPH_VERSION: $env.MONUV_GRAPH_VERSION || 'v24.0',\n};\nconst GRAPH = `https://graph.facebook.com/${ENV.GRAPH_VERSION}`;\nconst helpers = this.helpers;\n\nclass HttpError extends Error {\n  constructor(status, code, message, extra = {}) {\n    super(message);\n    this.status = status;\n    this.code = code;\n    this.extra = extra;\n  }\n}\n\nfunction respond(status, body) {\n  return [{ json: { status, body } }];\n}\n\nfunction handleError(e, extra = {}) {\n  if (e instanceof HttpError) {\n    return respond(e.status, { ok: false, error: { code: e.code, message: e.message }, ...extra, ...e.extra });\n  }\n  return respond(500, { ok: false, error: { code: 'internal', message: String((e && e.message) || e) }, ...extra });\n}\n\nasync function http(opts) {\n  const res = await helpers.httpRequest({\n    json: true,\n    ignoreHttpStatusErrors: true,\n    returnFullResponse: true,\n    timeout: 30000,\n    ...opts,\n  });\n  let body = res.body;\n  if (typeof body === 'string') {\n    try { body = JSON.parse(body); } catch (_) { /* texto */ }\n  }\n  return { status: res.statusCode, body };\n}\n\n// ---------------------------------------------------------------- Supabase\nasync function sb(method, path, body, headers = {}) {\n  if (!ENV.SUPABASE_URL || !ENV.SERVICE_KEY) {\n    throw new HttpError(500, 'config', 'MONUV_SUPABASE_URL / MONUV_SUPABASE_SERVICE_ROLE_KEY não configurados no n8n.');\n  }\n  const r = await http({\n    method,\n    url: ENV.SUPABASE_URL + path,\n    headers: {\n      apikey: ENV.SERVICE_KEY,\n      Authorization: `Bearer ${ENV.SERVICE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=representation',\n      ...headers,\n    },\n    body,\n  });\n  if (r.status >= 300) {\n    throw new HttpError(502, 'supabase_error', `Supabase ${method} ${path.split('?')[0]} → ${r.status}`, { supabase: r.body });\n  }\n  return r.body;\n}\n\nasync function rpc(fn, args) {\n  return sb('POST', `/rest/v1/rpc/${fn}`, args);\n}\n\n/** Valida o JWT do usuário (Authorization: Bearer <access_token do Supabase>). */\nasync function authUser(req) {\n  const h = req.headers || {};\n  const authz = h.authorization || h.Authorization || '';\n  const jwt = String(authz).replace(/^Bearer\\s+/i, '').trim();\n  if (!jwt) throw new HttpError(401, 'unauthorized', 'Token de acesso ausente.');\n  const r = await http({\n    method: 'GET',\n    url: `${ENV.SUPABASE_URL}/auth/v1/user`,\n    headers: { apikey: ENV.SERVICE_KEY, Authorization: `Bearer ${jwt}` },\n  });\n  if (r.status !== 200 || !r.body || !r.body.id) throw new HttpError(401, 'unauthorized', 'Sessão inválida ou expirada.');\n  return r.body;\n}\n\n/** Contexto do usuário (profile + conta WhatsApp + token). Nunca devolva `token` na resposta. */\nasync function userContext(userId, waAccountId, { requireAccount = true } = {}) {\n  const ctx = await rpc('n8n_user_context', { p_user_id: userId, p_wa_account_id: waAccountId || null });\n  if (!ctx || !ctx.ok) throw new HttpError(403, 'no_profile', 'Perfil não encontrado.');\n  if (!ctx.can_use_app) throw new HttpError(403, 'plan_expired', 'Seu acesso está suspenso ou o período de teste terminou.');\n  if (requireAccount) {\n    if (!ctx.account) throw new HttpError(404, 'no_account', 'Nenhum número do WhatsApp conectado.');\n    if (!ctx.token) throw new HttpError(409, 'no_token', 'Conexão sem token válido. Reconecte o número.');\n  }\n  return ctx;\n}\n\n// ---------------------------------------------------------------- Graph API\n/**\n * Chamada à Graph API. O token vai no header (não na URL), então `request` pode ser\n * devolvido ao front com segurança para o painel JSON.\n */\nasync function graph(method, path, { token, body, qs } = {}) {\n  const url = GRAPH + path;\n  const r = await http({\n    method,\n    url,\n    qs,\n    body,\n    headers: token ? { Authorization: `Bearer ${token}` } : {},\n  });\n  const request = { method, url: url + (qs ? '?' + new URLSearchParams(qs).toString() : '') };\n  if (body !== undefined) request.body = body;\n  return { ok: r.status >= 200 && r.status < 300, http_status: r.status, request, response: r.body };\n}\n\nfunction metaError(resp) {\n  const e = resp && resp.error;\n  if (!e) return null;\n  return {\n    message: e.error_user_msg || e.message,\n    code: e.code,\n    subcode: e.error_subcode,\n    type: e.type,\n    fbtrace_id: e.fbtrace_id,\n    details: e.error_data && e.error_data.details,\n  };\n}\n\nfunction maskSecrets(obj) {\n  const SECRET_KEYS = ['access_token', 'client_secret', 'input_token', 'pin'];\n  const walk = (v) => {\n    if (Array.isArray(v)) return v.map(walk);\n    if (v && typeof v === 'object') {\n      const o = {};\n      for (const [k, val] of Object.entries(v)) {\n        o[k] = SECRET_KEYS.includes(k) && typeof val === 'string' ? `${val.slice(0, 6)}…(oculto)` : walk(val);\n      }\n      return o;\n    }\n    if (typeof v === 'string') {\n      return v.replace(/(client_secret|code|access_token|input_token)=([^&\\s]+)/g, (_, k) => `${k}=***`);\n    }\n    return v;\n  };\n  return walk(obj);\n}\n\nfunction step(name, g) {\n  return {\n    name,\n    ok: g.ok,\n    http_status: g.http_status,\n    request: maskSecrets(g.request),\n    response: maskSecrets(g.response),\n  };\n}\n\nfunction onlyDigits(v) {\n  return String(v || '').replace(/\\D/g, '');\n}\n\n/** Monta o objeto `template` da Cloud API a partir dos parâmetros enviados pelo front. */\nfunction buildTemplate(name, language, params = {}) {\n  const named = params.parameter_format === 'NAMED';\n  const textParam = (p) =>\n    named ? { type: 'text', parameter_name: p.key, text: String(p.value ?? '') } : { type: 'text', text: String(p.value ?? '') };\n  const components = [];\n\n  if (params.header_media && params.header_media.link) {\n    const t = params.header_media.type;\n    const media = { link: params.header_media.link };\n    if (t === 'document' && params.header_media.filename) media.filename = params.header_media.filename;\n    components.push({ type: 'header', parameters: [{ type: t, [t]: media }] });\n  } else if (Array.isArray(params.header) && params.header.length) {\n    components.push({ type: 'header', parameters: params.header.map(textParam) });\n  }\n  if (Array.isArray(params.body) && params.body.length) {\n    components.push({ type: 'body', parameters: params.body.map(textParam) });\n  }\n  for (const b of params.buttons || []) {\n    components.push({\n      type: 'button',\n      sub_type: 'url',\n      index: String(b.index),\n      parameters: [{ type: 'text', text: String(b.value ?? '') }],\n    });\n  }\n  const tpl = { name, language: { code: language } };\n  if (components.length) tpl.components = components;\n  return tpl;\n}\n// ============================================================================\n\n// Processa eventos da Meta (roda DEPOIS do 200 já ter sido respondido).\nconst { valid, reason, payload } = $input.first().json;\n\n// Assinatura inválida: só registra (sem processar nada)\nif (!valid) {\n  await sb(\n    'POST',\n    '/rest/v1/webhook_events',\n    { signature_valid: false, object: payload && payload.object, payload, processed: false, error: reason },\n    { Prefer: 'return=minimal' },\n  );\n  return [{ json: { valid: false, reason } }];\n}\n\nconst accountsByWaba = {};\nasync function accountFor({ wabaId, phoneNumberId }) {\n  const key = phoneNumberId ? `p:${phoneNumberId}` : `w:${wabaId}`;\n  if (key in accountsByWaba) return accountsByWaba[key];\n  const filter = phoneNumberId ? `phone_number_id=eq.${encodeURIComponent(phoneNumberId)}` : `waba_id=eq.${encodeURIComponent(wabaId)}`;\n  const rows = await sb('GET', `/rest/v1/wa_accounts?${filter}&select=id,user_id,waba_id,display_phone_number&limit=1`);\n  accountsByWaba[key] = rows[0] || null;\n  return accountsByWaba[key];\n}\n\nconst results = [];\n\nfor (const entry of (payload && payload.entry) || []) {\n  const wabaId = String(entry.id || '');\n  for (const change of entry.changes || []) {\n    const field = change.field;\n    const value = change.value || {};\n    let error = null;\n    let acc = null;\n\n    try {\n      acc = await accountFor({ wabaId, phoneNumberId: value.metadata && value.metadata.phone_number_id });\n\n      if (field === 'messages') {\n        // status de mensagens enviadas\n        for (const s of value.statuses || []) {\n          const r = await rpc('apply_message_status', {\n            p_wa_message_id: s.id,\n            p_status: s.status,\n            p_occurred_at: s.timestamp ? new Date(Number(s.timestamp) * 1000).toISOString() : new Date().toISOString(),\n            p_payload: s,\n          });\n          results.push({ type: 'status', id: s.id, status: s.status, r });\n        }\n        // mensagens recebidas\n        if (acc && Array.isArray(value.messages) && value.messages.length) {\n          const contacts = value.contacts || [];\n          await sb(\n            'POST',\n            '/rest/v1/messages?on_conflict=wa_message_id',\n            value.messages.map((m) => {\n              const c = contacts.find((x) => x.wa_id === m.from);\n              const text =\n                (m.text && m.text.body) ||\n                (m.button && m.button.text) ||\n                (m.interactive && JSON.stringify(m.interactive)) ||\n                `[${m.type}]`;\n              return {\n                user_id: acc.user_id,\n                wa_account_id: acc.id,\n                direction: 'inbound',\n                from_number: m.from,\n                to_number: value.metadata && value.metadata.display_phone_number,\n                type: m.type,\n                body_preview: (c && c.profile && c.profile.name ? `${c.profile.name}: ` : '') + String(text).slice(0, 4000),\n                response_payload: m,\n                wa_message_id: m.id,\n                status: 'received',\n                created_at: new Date(m.timestamp ? Number(m.timestamp) * 1000 : Date.now()).toISOString(),\n              };\n            }),\n            { Prefer: 'resolution=ignore-duplicates,return=minimal' },\n          );\n          results.push({ type: 'inbound', count: value.messages.length });\n        }\n      } else if (field === 'message_template_status_update') {\n        const patch = { status: value.event };\n        patch.rejected_reason = value.reason && value.reason !== 'NONE' ? value.reason : null;\n        await sb('PATCH', `/rest/v1/templates?meta_template_id=eq.${encodeURIComponent(String(value.message_template_id))}`, patch, {\n          Prefer: 'return=minimal',\n        });\n        results.push({ type: 'template_status', id: value.message_template_id, status: value.event });\n      } else if (field === 'message_template_quality_update') {\n        await sb(\n          'PATCH',\n          `/rest/v1/templates?meta_template_id=eq.${encodeURIComponent(String(value.message_template_id))}`,\n          { quality_score: value.new_quality_score || null },\n          { Prefer: 'return=minimal' },\n        );\n        results.push({ type: 'template_quality', id: value.message_template_id });\n      } else if (field === 'account_update' && value.event === 'PARTNER_REMOVED' && wabaId) {\n        // cliente removeu o app na Meta → marca contas da WABA como desconectadas\n        await sb('PATCH', `/rest/v1/wa_accounts?waba_id=eq.${encodeURIComponent(wabaId)}`, { status: 'disconnected', webhook_subscribed: false }, {\n          Prefer: 'return=minimal',\n        });\n        results.push({ type: 'partner_removed', waba_id: wabaId });\n      }\n    } catch (e) {\n      error = String((e && e.message) || e);\n    }\n\n    await sb(\n      'POST',\n      '/rest/v1/webhook_events',\n      {\n        signature_valid: true,\n        object: payload.object,\n        field,\n        waba_id: wabaId || null,\n        user_id: acc ? acc.user_id : null,\n        payload: { entry_id: entry.id, change },\n        processed: !error,\n        error,\n      },\n      { Prefer: 'return=minimal' },\n    );\n  }\n}\n\nreturn [{ json: { valid: true, results } }];\n"
+      },
+      "id": "0e5a5acc-c6af-435d-a5da-d8ecae3899dc",
+      "name": "Processar eventos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook GET (verificação)": {
+      "main": [
+        [
+          {
+            "node": "Verificar token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar token": {
+      "main": [
+        [
+          {
+            "node": "Responder challenge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook POST (eventos)": {
+      "main": [
+        [
+          {
+            "node": "Validar assinatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar assinatura": {
+      "main": [
+        [
+          {
+            "node": "Responder 200/401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder 200/401": {
+      "main": [
+        [
+          {
+            "node": "Processar eventos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

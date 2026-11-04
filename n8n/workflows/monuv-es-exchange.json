@@ -1,0 +1,86 @@
+{
+  "name": "Monuv - ES Exchange",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "monuv/es-exchange",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "https://msg.monuv.com.br,http://localhost:5173"
+        }
+      },
+      "id": "d6afeeb6-d64b-438b-a8df-e6fe78b1d927",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "5520164d-8ebb-494c-a098-8ab58036b62f"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================================\n// monuv lib — gerado por n8n/build.mjs a partir de n8n/src/_lib.js.\n// NÃO edite no n8n: edite no repositório e reimporte o workflow.\n// Requer no n8n: N8N_BLOCK_ENV_ACCESS_IN_NODE=false\n// ============================================================================\nconst ENV = {\n  SUPABASE_URL: String($env.MONUV_SUPABASE_URL || '').replace(/\\/+$/, ''),\n  SERVICE_KEY: $env.MONUV_SUPABASE_SERVICE_ROLE_KEY,\n  APP_ID: $env.MONUV_META_APP_ID,\n  APP_SECRET: $env.MONUV_META_APP_SECRET,\n  VERIFY_TOKEN: $env.MONUV_META_VERIFY_TOKEN,\n  GRAPH_VERSION: $env.MONUV_GRAPH_VERSION || 'v24.0',\n};\nconst GRAPH = `https://graph.facebook.com/${ENV.GRAPH_VERSION}`;\nconst helpers = this.helpers;\n\nclass HttpError extends Error {\n  constructor(status, code, message, extra = {}) {\n    super(message);\n    this.status = status;\n    this.code = code;\n    this.extra = extra;\n  }\n}\n\nfunction respond(status, body) {\n  return [{ json: { status, body } }];\n}\n\nfunction handleError(e, extra = {}) {\n  if (e instanceof HttpError) {\n    return respond(e.status, { ok: false, error: { code: e.code, message: e.message }, ...extra, ...e.extra });\n  }\n  return respond(500, { ok: false, error: { code: 'internal', message: String((e && e.message) || e) }, ...extra });\n}\n\nasync function http(opts) {\n  const res = await helpers.httpRequest({\n    json: true,\n    ignoreHttpStatusErrors: true,\n    returnFullResponse: true,\n    timeout: 30000,\n    ...opts,\n  });\n  let body = res.body;\n  if (typeof body === 'string') {\n    try { body = JSON.parse(body); } catch (_) { /* texto */ }\n  }\n  return { status: res.statusCode, body };\n}\n\n// ---------------------------------------------------------------- Supabase\nasync function sb(method, path, body, headers = {}) {\n  if (!ENV.SUPABASE_URL || !ENV.SERVICE_KEY) {\n    throw new HttpError(500, 'config', 'MONUV_SUPABASE_URL / MONUV_SUPABASE_SERVICE_ROLE_KEY não configurados no n8n.');\n  }\n  const r = await http({\n    method,\n    url: ENV.SUPABASE_URL + path,\n    headers: {\n      apikey: ENV.SERVICE_KEY,\n      Authorization: `Bearer ${ENV.SERVICE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=representation',\n      ...headers,\n    },\n    body,\n  });\n  if (r.status >= 300) {\n    throw new HttpError(502, 'supabase_error', `Supabase ${method} ${path.split('?')[0]} → ${r.status}`, { supabase: r.body });\n  }\n  return r.body;\n}\n\nasync function rpc(fn, args) {\n  return sb('POST', `/rest/v1/rpc/${fn}`, args);\n}\n\n/** Valida o JWT do usuário (Authorization: Bearer <access_token do Supabase>). */\nasync function authUser(req) {\n  const h = req.headers || {};\n  const authz = h.authorization || h.Authorization || '';\n  const jwt = String(authz).replace(/^Bearer\\s+/i, '').trim();\n  if (!jwt) throw new HttpError(401, 'unauthorized', 'Token de acesso ausente.');\n  const r = await http({\n    method: 'GET',\n    url: `${ENV.SUPABASE_URL}/auth/v1/user`,\n    headers: { apikey: ENV.SERVICE_KEY, Authorization: `Bearer ${jwt}` },\n  });\n  if (r.status !== 200 || !r.body || !r.body.id) throw new HttpError(401, 'unauthorized', 'Sessão inválida ou expirada.');\n  return r.body;\n}\n\n/** Contexto do usuário (profile + conta WhatsApp + token). Nunca devolva `token` na resposta. */\nasync function userContext(userId, waAccountId, { requireAccount = true } = {}) {\n  const ctx = await rpc('n8n_user_context', { p_user_id: userId, p_wa_account_id: waAccountId || null });\n  if (!ctx || !ctx.ok) throw new HttpError(403, 'no_profile', 'Perfil não encontrado.');\n  if (!ctx.can_use_app) throw new HttpError(403, 'plan_expired', 'Seu acesso está suspenso ou o período de teste terminou.');\n  if (requireAccount) {\n    if (!ctx.account) throw new HttpError(404, 'no_account', 'Nenhum número do WhatsApp conectado.');\n    if (!ctx.token) throw new HttpError(409, 'no_token', 'Conexão sem token válido. Reconecte o número.');\n  }\n  return ctx;\n}\n\n// ---------------------------------------------------------------- Graph API\n/**\n * Chamada à Graph API. O token vai no header (não na URL), então `request` pode ser\n * devolvido ao front com segurança para o painel JSON.\n */\nasync function graph(method, path, { token, body, qs } = {}) {\n  const url = GRAPH + path;\n  const r = await http({\n    method,\n    url,\n    qs,\n    body,\n    headers: token ? { Authorization: `Bearer ${token}` } : {},\n  });\n  const request = { method, url: url + (qs ? '?' + new URLSearchParams(qs).toString() : '') };\n  if (body !== undefined) request.body = body;\n  return { ok: r.status >= 200 && r.status < 300, http_status: r.status, request, response: r.body };\n}\n\nfunction metaError(resp) {\n  const e = resp && resp.error;\n  if (!e) return null;\n  return {\n    message: e.error_user_msg || e.message,\n    code: e.code,\n    subcode: e.error_subcode,\n    type: e.type,\n    fbtrace_id: e.fbtrace_id,\n    details: e.error_data && e.error_data.details,\n  };\n}\n\nfunction maskSecrets(obj) {\n  const SECRET_KEYS = ['access_token', 'client_secret', 'input_token', 'pin'];\n  const walk = (v) => {\n    if (Array.isArray(v)) return v.map(walk);\n    if (v && typeof v === 'object') {\n      const o = {};\n      for (const [k, val] of Object.entries(v)) {\n        o[k] = SECRET_KEYS.includes(k) && typeof val === 'string' ? `${val.slice(0, 6)}…(oculto)` : walk(val);\n      }\n      return o;\n    }\n    if (typeof v === 'string') {\n      return v.replace(/(client_secret|code|access_token|input_token)=([^&\\s]+)/g, (_, k) => `${k}=***`);\n    }\n    return v;\n  };\n  return walk(obj);\n}\n\nfunction step(name, g) {\n  return {\n    name,\n    ok: g.ok,\n    http_status: g.http_status,\n    request: maskSecrets(g.request),\n    response: maskSecrets(g.response),\n  };\n}\n\nfunction onlyDigits(v) {\n  return String(v || '').replace(/\\D/g, '');\n}\n\n/** Monta o objeto `template` da Cloud API a partir dos parâmetros enviados pelo front. */\nfunction buildTemplate(name, language, params = {}) {\n  const named = params.parameter_format === 'NAMED';\n  const textParam = (p) =>\n    named ? { type: 'text', parameter_name: p.key, text: String(p.value ?? '') } : { type: 'text', text: String(p.value ?? '') };\n  const components = [];\n\n  if (params.header_media && params.header_media.link) {\n    const t = params.header_media.type;\n    const media = { link: params.header_media.link };\n    if (t === 'document' && params.header_media.filename) media.filename = params.header_media.filename;\n    components.push({ type: 'header', parameters: [{ type: t, [t]: media }] });\n  } else if (Array.isArray(params.header) && params.header.length) {\n    components.push({ type: 'header', parameters: params.header.map(textParam) });\n  }\n  if (Array.isArray(params.body) && params.body.length) {\n    components.push({ type: 'body', parameters: params.body.map(textParam) });\n  }\n  for (const b of params.buttons || []) {\n    components.push({\n      type: 'button',\n      sub_type: 'url',\n      index: String(b.index),\n      parameters: [{ type: 'text', text: String(b.value ?? '') }],\n    });\n  }\n  const tpl = { name, language: { code: language } };\n  if (components.length) tpl.components = components;\n  return tpl;\n}\n// ============================================================================\n\n// POST monuv/es-exchange — finaliza o Embedded Signup\n// body: { code, waba_id?, phone_number_id?, business_id?, event? }\nconst req = $input.first().json;\nconst steps = [];\n\ntry {\n  const user = await authUser(req);\n  await userContext(user.id, null, { requireAccount: false });\n\n  const body = req.body || {};\n  if (!body.code) throw new HttpError(400, 'bad_request', 'Parâmetro \"code\" ausente.');\n  if (!ENV.APP_ID || !ENV.APP_SECRET) throw new HttpError(500, 'config', 'MONUV_META_APP_ID / MONUV_META_APP_SECRET não configurados.');\n\n  // 1) Troca do code por token (business integration system user token)\n  const ex = await graph('GET', '/oauth/access_token', {\n    qs: { client_id: ENV.APP_ID, client_secret: ENV.APP_SECRET, code: body.code },\n  });\n  steps.push(step('exchange_code', ex));\n  if (!ex.ok || !ex.response.access_token) {\n    throw new HttpError(502, 'exchange_failed', (metaError(ex.response) || {}).message || 'Falha ao trocar o code pelo token.');\n  }\n  const token = ex.response.access_token;\n\n  // 2) Confere quais WABAs o token realmente pode acessar\n  const dbg = await graph('GET', '/debug_token', {\n    qs: { input_token: token },\n    token: `${ENV.APP_ID}|${ENV.APP_SECRET}`,\n  });\n  steps.push(step('debug_token', dbg));\n  const scopes = (dbg.response && dbg.response.data && dbg.response.data.granular_scopes) || [];\n  const mgmt = scopes.find((s) => s.scope === 'whatsapp_business_management');\n  const allowedWabas = (mgmt && mgmt.target_ids) || [];\n\n  let wabaId = body.waba_id ? String(body.waba_id) : null;\n  if (!wabaId && allowedWabas.length) wabaId = String(allowedWabas[allowedWabas.length - 1]);\n  if (!wabaId) throw new HttpError(400, 'no_waba', 'Não foi possível identificar a conta do WhatsApp Business (WABA).');\n  if (allowedWabas.length && !allowedWabas.map(String).includes(wabaId)) {\n    throw new HttpError(403, 'waba_not_granted', 'A WABA informada não foi autorizada para este aplicativo.');\n  }\n\n  // 3) Número de telefone (se o session info não trouxe, pega o primeiro da WABA)\n  let phoneId = body.phone_number_id ? String(body.phone_number_id) : null;\n  if (!phoneId) {\n    const list = await graph('GET', `/${wabaId}/phone_numbers`, { token, qs: { fields: 'id,display_phone_number,verified_name' } });\n    steps.push(step('list_phone_numbers', list));\n    phoneId = list.ok && list.response.data && list.response.data[0] ? String(list.response.data[0].id) : null;\n  }\n  if (!phoneId) throw new HttpError(400, 'no_phone', 'Nenhum número encontrado na WABA.');\n\n  // 4) Assina o app na WABA (necessário para receber webhooks)\n  const sub = await graph('POST', `/${wabaId}/subscribed_apps`, { token });\n  steps.push(step('subscribe_app', sub));\n\n  // 5) Registra o número na Cloud API (pula no modo coexistência com o app WhatsApp Business)\n  const coexistence = String(body.event || '').includes('WHATSAPP_BUSINESS_APP');\n  let pin = null;\n  let registered = coexistence;\n  if (!coexistence) {\n    pin = String(require('crypto').randomInt(0, 1000000)).padStart(6, '0');\n    const reg = await graph('POST', `/${phoneId}/register`, { token, body: { messaging_product: 'whatsapp', pin } });\n    steps.push(step('register_phone', reg));\n    const err = metaError(reg.response);\n    // número já registrado anteriormente também serve\n    registered = reg.ok || (err && /already registered/i.test(err.message || ''));\n    if (!reg.ok) pin = null;\n  }\n\n  // 6) Detalhes do número e da WABA\n  const ph = await graph('GET', `/${phoneId}`, {\n    token,\n    qs: { fields: 'display_phone_number,verified_name,quality_rating,code_verification_status,name_status,status' },\n  });\n  steps.push(step('phone_details', ph));\n  const wb = await graph('GET', `/${wabaId}`, { token, qs: { fields: 'name' } });\n  steps.push(step('waba_details', wb));\n\n  // 7) Grava (impede que outro usuário \"sequestre\" um número já conectado)\n  const existing = await sb('GET', `/rest/v1/wa_accounts?phone_number_id=eq.${encodeURIComponent(phoneId)}&select=id,user_id`);\n  if (existing.length && existing[0].user_id !== user.id) {\n    throw new HttpError(409, 'phone_in_use', 'Este número já está conectado a outra conta Monuv.');\n  }\n  const p = ph.ok ? ph.response : {};\n  const rows = await sb(\n    'POST',\n    '/rest/v1/wa_accounts?on_conflict=phone_number_id',\n    {\n      user_id: user.id,\n      business_id: body.business_id ? String(body.business_id) : null,\n      waba_id: wabaId,\n      waba_name: wb.ok ? wb.response.name : null,\n      phone_number_id: phoneId,\n      display_phone_number: p.display_phone_number || null,\n      verified_name: p.verified_name || null,\n      quality_rating: p.quality_rating || null,\n      name_status: p.name_status || null,\n      code_verification_status: p.code_verification_status || null,\n      phone_status: p.status || null,\n      status: registered && sub.ok ? 'connected' : 'pending',\n      webhook_subscribed: sub.ok,\n      last_error: registered && sub.ok ? null : { steps: steps.filter((s) => !s.ok).map((s) => s.name) },\n      connected_at: new Date().toISOString(),\n    },\n    { Prefer: 'resolution=merge-duplicates,return=representation' },\n  );\n  const account = rows[0];\n\n  await rpc('wa_store_secret', { p_wa_account_id: account.id, p_kind: 'token', p_value: token });\n  if (pin) await rpc('wa_store_secret', { p_wa_account_id: account.id, p_kind: 'pin', p_value: pin });\n  steps.push({ name: 'save_account', ok: true, response: { wa_account_id: account.id, status: account.status } });\n\n  return respond(200, { ok: true, account, steps });\n} catch (e) {\n  return handleError(e, { steps });\n}\n"
+      },
+      "id": "d433955f-8455-4b67-a890-4b7e1eb41460",
+      "name": "Processar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "id": "92c1b784-329f-489c-a1fd-27fdcd4e5bc1",
+      "name": "Responder",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Processar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "tags": []
+}
