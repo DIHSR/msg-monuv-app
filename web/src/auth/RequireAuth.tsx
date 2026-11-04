@@ -20,13 +20,18 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (!session) return <Navigate to="/login" replace state={{ from: location.pathname }} />
   if (profileLoading) return <FullScreenSpinner />
 
-  if (profile && !profile.can_use_app) {
+  // Falha fechado: login válido sem perfil Monuv (ex.: usuário de outro sistema no mesmo Supabase) não entra.
+  if (!profile || !profile.can_use_app) {
     return (
       <div className="flex h-full items-center justify-center p-4">
         <EmptyState
           icon={<Lock className="size-6" />}
           title="Acesso indisponível"
-          description="Seu período de teste terminou ou a conta está suspensa. Fale com a equipe Monuv para reativar."
+          description={
+            profile
+              ? 'Seu período de teste terminou ou a conta está suspensa. Fale com a equipe Monuv para reativar.'
+              : 'Este login não tem acesso ao Monuv Mensagens. Fale com a equipe Monuv.'
+          }
           action={
             <Button variant="secondary" onClick={() => void signOut()}>
               Sair
