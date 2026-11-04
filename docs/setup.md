@@ -13,7 +13,7 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
    - Confirm email: tanto faz. O usuário demo é criado já confirmado.
 3. **Authentication → URL Configuration:** Site URL `https://msg.monuv.com.br`. Inclua também `http://localhost:5173` nas Redirect URLs.
 4. **Vault:** já vem habilitado nos projetos Supabase. A migration usa `vault.create_secret`.
-5. **Plano Free:** o projeto **pausa após cerca de 7 dias sem atividade**. O workflow `Monuv - Keepalive e Monitor Demo` faz um ping a cada 12h, mas **antes de submeter ao App Review o recomendado é migrar para o Pro**. A Meta pode levar semanas para revisar, e o revisor precisa de acesso por 1 ano.
+5. **Plano Free:** o projeto **pausa após cerca de 7 dias sem atividade**. A fila de campanhas do workflow `Monuv` consulta o banco a cada minuto (o que mantém o projeto ativo), mas **antes de submeter ao App Review o recomendado é migrar para o Pro**. A Meta pode levar semanas para revisar, e o revisor precisa de acesso por 1 ano.
 
 ### Chaves
 
@@ -30,29 +30,28 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
    - `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` permite que os Code nodes leiam `$env.MONUV_*`.
    - `NODE_FUNCTION_ALLOW_BUILTIN=crypto` é necessário para o HMAC do webhook e para gerar o PIN de registro.
    - Com task runners externos (n8n 2.x, `n8n-runners`), as variáveis `NODE_FUNCTION_ALLOW_*` vão no container do **runner**.
-2. **CORS:** por padrão os workflows aceitam só `https://msg.monuv.com.br`. Para um n8n de desenvolvimento, gere com origens extras:
+2. **CORS:** por padrão o workflow aceita só `https://msg.monuv.com.br`. Para um n8n de desenvolvimento, gere com origens extras:
    ```bash
    MONUV_ALLOWED_ORIGINS="https://msg.monuv.com.br,http://localhost:5173" node n8n/build.mjs
    ```
-   Não importe no n8n de produção workflows gerados com `localhost`.
-3. **Importar:** em cada `n8n/workflows/*.json`, use n8n → *Import from File* e **ative** o workflow.
-4. **URLs geradas** (supondo `https://n8n.seudominio.com.br`):
+   Não importe no n8n de produção um workflow gerado com `localhost`.
+3. **Importar:** um único arquivo, `n8n/workflows/monuv.json` → n8n *Import from File* → **ative** o workflow.
+4. **Estrutura do workflow `Monuv`** (3 faixas, cada uma com uma nota explicativa no canvas):
 
-   | Workflow | Método | URL |
+   | Faixa | Gatilho | URL / frequência |
    |---|---|---|
-   | ES Exchange | POST | `/webhook/monuv/es-exchange` |
-   | Connection Refresh | POST | `/webhook/monuv/connection-refresh` |
-   | Templates Sync | POST | `/webhook/monuv/templates-sync` |
-   | Templates Create | POST | `/webhook/monuv/templates-create` |
-   | Messages Send | POST | `/webhook/monuv/messages-send` |
-   | Campaigns Start | POST | `/webhook/monuv/campaigns-start` |
-   | Meta Webhook | GET + POST | `/webhook/monuv/meta-webhook` |
+   | API do front | Webhook POST | `/webhook/monuv/api` com `{ action, ... }` |
+   | Webhook da Meta | Webhook GET + POST | `/webhook/monuv/meta-webhook` |
+   | Agendador | Schedule | campanhas: a cada 1 min · monitor do demo: a cada 12 h |
+
+   Ações da API (`action`): `es.exchange`, `connection.refresh`, `templates.sync`, `templates.create`, `messages.send`, `campaigns.start`.
+   O **Roteador** autentica o JWT uma vez e o Switch **Ação** encaminha ao handler. Campanhas entram numa fila no banco e são enviadas pelo agendador em lotes.
 
    No front: `VITE_N8N_BASE_URL=https://n8n.seudominio.com.br/webhook/monuv`.
 
-5. **Error Workflow:** em *Settings* do workflow de keepalive, aponte um Error Workflow que te notifique (e-mail, Telegram etc.). Se o login do demo falhar, você fica sabendo antes do revisor.
+5. **Error Workflow:** em *Settings* do workflow `Monuv`, aponte um Error Workflow que te notifique (e-mail, Telegram etc.). Se o monitor do demo ou a fila de campanhas falharem, você fica sabendo antes do revisor.
 
-> **Editar código:** altere `n8n/src/*.js`, rode `node n8n/build.mjs` e reimporte. Não edite direto no n8n, ou o repositório perde a fonte da verdade.
+> **Editar código:** altere `n8n/src/**.js`, rode `node n8n/build.mjs` e reimporte o `monuv.json` (substituindo o workflow existente). Não edite direto no n8n, ou o repositório perde a fonte da verdade.
 
 ---
 
