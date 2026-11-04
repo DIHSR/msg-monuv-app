@@ -15,20 +15,24 @@ try {
   const ctx = await userContext(user.id, camp.wa_account_id);
   if (ctx.is_demo) throw new HttpError(403, 'demo', 'Envio em lote indisponível na conta de demonstração.');
 
-  await sb(
+  // total calculado no servidor (o front não grava contadores)
+  const recipients = await sb('GET', `/rest/v1/campaign_recipients?campaign_id=eq.${campaignId}&select=id&limit=50000`);
+
+  // transição draft → running atômica: só uma execução consegue iniciar a campanha
+  const started = await sb(
     'PATCH',
-    `/rest/v1/campaigns?id=eq.${campaignId}`,
-    { status: 'running', started_at: new Date().toISOString() },
-    { Prefer: 'return=minimal' },
+    `/rest/v1/campaigns?id=eq.${campaignId}&status=eq.draft`,
+    { status: 'running', started_at: new Date().toISOString(), total: recipients.length },
   );
+  if (!started.length) throw new HttpError(409, 'invalid_state', 'Campanha já foi iniciada.');
 
   return [
     {
       json: {
         status: 202,
-        body: { ok: true, data: { campaign_id: campaignId, total: camp.total } },
+        body: { ok: true, data: { campaign_id: campaignId, total: recipients.length } },
         proceed: true,
-        campaign: camp,
+        campaign: started[0],
         user_id: user.id,
       },
     },

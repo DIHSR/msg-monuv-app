@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const src = (f) => readFileSync(join(here, 'src', f), 'utf8')
 const LIB = src('_lib.js')
-const ORIGINS = process.env.MONUV_ALLOWED_ORIGINS || 'https://msg.monuv.com.br,http://localhost:5173'
+// Produção por padrão. Para desenvolvimento: MONUV_ALLOWED_ORIGINS="https://msg.monuv.com.br,http://localhost:5173"
+const ORIGINS = process.env.MONUV_ALLOWED_ORIGINS || 'https://msg.monuv.com.br'
 const PREFIX = 'monuv'
 
 // UUID determinístico (rebuild não muda ids → diffs limpos)
@@ -112,6 +113,10 @@ function workflow(name, build, settings = {}) {
 
 // Endpoints chamados pelo front (CORS liberado só para as origens do app)
 const cors = { allowedOrigins: ORIGINS }
+// Execuções com sucesso não são salvas: evita guardar no n8n payloads com dados pessoais
+// e corpos assinados da Meta que poderiam ser reenviados.
+const NO_SUCCESS_DATA = { saveDataSuccessExecution: 'none', saveManualExecutions: true }
+
 const simpleEndpoints = [
   ['Monuv - ES Exchange', 'es-exchange', 'es-exchange.js'],
   ['Monuv - Connection Refresh', 'connection-refresh', 'connection-refresh.js'],
@@ -128,8 +133,7 @@ for (const [name, path, file] of simpleEndpoints) {
       const r = b.respond('Responder', [480, 0])
       b.chain(w, c, r)
     },
-    // execuções com sucesso não são salvas (evita guardar payloads com dados pessoais no n8n)
-    { saveDataSuccessExecution: 'none', saveManualExecutions: true },
+    NO_SUCCESS_DATA,
   )
 }
 
@@ -162,7 +166,7 @@ workflow(
     b.link(loop, send, 1) // loop
     b.chain(send, wait, loop)
   },
-  { saveDataSuccessExecution: 'none', saveManualExecutions: true },
+  NO_SUCCESS_DATA,
 )
 
 workflow('Monuv - Meta Webhook', (b) => {
@@ -178,7 +182,7 @@ workflow('Monuv - Meta Webhook', (b) => {
   const rp = b.respond('Responder 200/401', [480, 80], 'text')
   const proc = b.code('Processar eventos', 'webhook-process.js', [720, 80])
   b.chain(wp, sig, rp, proc)
-})
+}, NO_SUCCESS_DATA)
 
 workflow('Monuv - Keepalive e Monitor Demo', (b) => {
   const t = b.raw({

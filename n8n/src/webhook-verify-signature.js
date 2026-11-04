@@ -28,11 +28,15 @@ if (!ENV.APP_SECRET) {
   if (!valid) reason = 'signature_mismatch';
 }
 
+// O payload só é aproveitado quando a assinatura confere — e sempre a partir dos MESMOS bytes assinados.
 let payload = null;
-try {
-  payload = raw ? JSON.parse(raw.toString('utf8')) : item.json.body || null;
-} catch (_) {
-  payload = item.json.body || null;
+if (valid) {
+  try {
+    payload = JSON.parse(raw.toString('utf8'));
+  } catch (_) {
+    valid = false;
+    reason = 'invalid_json';
+  }
 }
 
 return [
@@ -43,6 +47,8 @@ return [
       valid,
       reason,
       payload,
+      raw_size: raw ? raw.length : null,
+      raw_sha256: raw ? crypto.createHash('sha256').update(raw).digest('hex') : null,
     },
   },
 ];

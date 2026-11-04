@@ -13,13 +13,16 @@ const ENV = {
 };
 const GRAPH = `https://graph.facebook.com/${ENV.GRAPH_VERSION}`;
 const helpers = this.helpers;
+const EXECUTION_ID = (typeof $execution !== 'undefined' && $execution && $execution.id) || null;
 
+/** Erro com status HTTP. Status < 500 = erro do cliente (mensagem vai ao navegador). */
 class HttpError extends Error {
-  constructor(status, code, message, extra = {}) {
+  constructor(status, code, message, extra = {}, detail = null) {
     super(message);
     this.status = status;
     this.code = code;
     this.extra = extra;
+    this.detail = detail;
   }
 }
 
@@ -27,11 +30,28 @@ function respond(status, body) {
   return [{ json: { status, body } }];
 }
 
-function handleError(e, extra = {}) {
-  if (e instanceof HttpError) {
+/** Registra detalhes internos no Supabase (app_errors) — nunca no corpo da resposta. */
+async function logInternalError(e) {
+  try {
+    await sb('POST', '/rest/v1/app_errors', {
+      execution_id: EXECUTION_ID,
+      code: (e && e.code) || 'internal',
+      message: String((e && e.message) || e).slice(0, 2000),
+      detail: (e && e.detail) || null,
+    }, { Prefer: 'return=minimal' });
+  } catch (_) { /* registro é best-effort */ }
+}
+
+async function handleError(e, extra = {}) {
+  if (e instanceof HttpError && e.status < 500) {
     return respond(e.status, { ok: false, error: { code: e.code, message: e.message }, ...extra, ...e.extra });
   }
-  return respond(500, { ok: false, error: { code: 'internal', message: String((e && e.message) || e) }, ...extra });
+  await logInternalError(e);
+  return respond(500, {
+    ok: false,
+    error: { code: 'internal', message: 'Erro interno. Informe a referência ao suporte.', ref: EXECUTION_ID },
+    ...extra,
+  });
 }
 
 async function http(opts) {
@@ -67,10 +87,12 @@ async function sb(method, path, body, headers = {}) {
     body,
   });
   if (r.status >= 300) {
-    throw new HttpError(502, 'supabase_error', `Supabase ${method} ${path.split('?')[0]} → ${r.status}`, { supabase: r.body });
+    throw new HttpError(502, 'supabase_error', `Supabase ${method} ${path.split('?')[0]} → ${r.status}`, {}, r.body);
   }
   return r.body;
 }
+
+const MINIMAL = { Prefer: 'return=minimal' };
 
 async function rpc(fn, args) {
   return sb('POST', `/rest/v1/rpc/${fn}`, args);
@@ -135,15 +157,14 @@ function metaError(resp) {
   };
 }
 
+/** Oculta segredos por completo (PIN de 6 dígitos, tokens, client_secret, code). */
 function maskSecrets(obj) {
   const SECRET_KEYS = ['access_token', 'client_secret', 'input_token', 'pin'];
   const walk = (v) => {
     if (Array.isArray(v)) return v.map(walk);
     if (v && typeof v === 'object') {
       const o = {};
-      for (const [k, val] of Object.entries(v)) {
-        o[k] = SECRET_KEYS.includes(k) && typeof val === 'string' ? `${val.slice(0, 6)}…(oculto)` : walk(val);
-      }
+      for (const [k, val] of Object.entries(v)) o[k] = SECRET_KEYS.includes(k) ? '***' : walk(val);
       return o;
     }
     if (typeof v === 'string') {
@@ -168,6 +189,22 @@ function onlyDigits(v) {
   return String(v || '').replace(/\D/g, '');
 }
 
+// ---------------------------------------------------------------- Número de telefone
+const PHONE_FIELDS = 'display_phone_number,verified_name,quality_rating,code_verification_status,name_status,status';
+
+/** Converte a resposta de GET /{phone_number_id} nas colunas de wa_accounts. */
+function phoneColumns(p) {
+  return {
+    display_phone_number: p.display_phone_number || null,
+    verified_name: p.verified_name || null,
+    quality_rating: p.quality_rating || null,
+    name_status: p.name_status || null,
+    code_verification_status: p.code_verification_status || null,
+    phone_status: p.status || null,
+  };
+}
+
+// ---------------------------------------------------------------- Envio de template
 /** Monta o objeto `template` da Cloud API a partir dos parâmetros enviados pelo front. */
 function buildTemplate(name, language, params = {}) {
   const named = params.parameter_format === 'NAMED';
@@ -197,5 +234,52 @@ function buildTemplate(name, language, params = {}) {
   const tpl = { name, language: { code: language } };
   if (components.length) tpl.components = components;
   return tpl;
+}
+
+/**
+ * Envia um template: reserva a cota e grava a mensagem ANTES de chamar a Meta
+ * (atômico no banco), envia, e registra a resposta.
+ * Retorna { limited } quando o limite diário foi atingido (nada é enviado).
+ */
+async function sendTemplateMessage({ userId, account, token, to, templateName, language, params, bodyPreview, campaignId }) {
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'template',
+    template: buildTemplate(templateName, language, params || {}),
+  };
+
+  const reserved = await rpc('reserve_outbound_message', {
+    p_user_id: userId,
+    p_message: {
+      wa_account_id: account.id,
+      campaign_id: campaignId || null,
+      to_number: to,
+      from_number: account.display_phone_number,
+      template_name: templateName,
+      template_language: language,
+      body_preview: typeof bodyPreview === 'string' ? bodyPreview : null,
+      request_payload: payload,
+    },
+  });
+  if (!reserved || !reserved.ok) {
+    return { limited: reserved && reserved.error === 'daily_limit', reserveError: reserved && reserved.error, dailyLimit: reserved && reserved.daily_send_limit };
+  }
+
+  const g = await graph('POST', `/${account.phone_number_id}/messages`, { token, body: payload });
+  const sent = g.ok && g.response && g.response.messages && g.response.messages[0];
+  const error = sent ? null : metaError(g.response);
+
+  await sb('PATCH', `/rest/v1/messages?id=eq.${reserved.id}`, {
+    response_payload: g.response,
+    http_status: g.http_status,
+    wa_message_id: sent ? sent.id : null,
+    status: sent ? 'accepted' : 'failed',
+    error,
+  }, MINIMAL);
+  if (sent) await rpc('attach_message_events', { p_message_id: reserved.id });
+
+  return { sent: !!sent, graph: g, error, messageId: reserved.id, waMessageId: sent ? sent.id : null };
 }
 // ============================================================================

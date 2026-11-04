@@ -9,10 +9,7 @@ try {
   const acc = ctx.account;
   const token = ctx.token;
 
-  const ph = await graph('GET', `/${acc.phone_number_id}`, {
-    token,
-    qs: { fields: 'display_phone_number,verified_name,quality_rating,code_verification_status,name_status,status' },
-  });
+  const ph = await graph('GET', `/${acc.phone_number_id}`, { token, qs: { fields: PHONE_FIELDS } });
   steps.push(step('phone_details', ph));
 
   const subs = await graph('GET', `/${acc.waba_id}/subscribed_apps`, { token });
@@ -27,22 +24,12 @@ try {
     subscribed = sub.ok;
   }
 
-  const p = ph.ok ? ph.response : {};
   const patch = {
     webhook_subscribed: subscribed,
     last_error: ph.ok ? null : metaError(ph.response),
     status: ph.ok ? 'connected' : 'error',
+    ...(ph.ok ? phoneColumns(ph.response) : {}),
   };
-  if (ph.ok) {
-    Object.assign(patch, {
-      display_phone_number: p.display_phone_number || acc.display_phone_number,
-      verified_name: p.verified_name || acc.verified_name,
-      quality_rating: p.quality_rating || null,
-      name_status: p.name_status || null,
-      code_verification_status: p.code_verification_status || null,
-      phone_status: p.status || null,
-    });
-  }
   const rows = await sb('PATCH', `/rest/v1/wa_accounts?id=eq.${acc.id}`, patch);
 
   return respond(ph.ok ? 200 : 502, {
