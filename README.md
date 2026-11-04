@@ -28,11 +28,11 @@ Painel para empresas conectarem o próprio número ao **WhatsApp Business Platfo
 | `n8n/src/` | Código dos Code nodes (fonte da verdade) |
 | `n8n/workflows/` | Workflows importáveis, **gerados** por `node n8n/build.mjs` |
 | `n8n/test/` | Testes do código dos nodes + script de teste do webhook real |
-| `docs/` | Setup, roteiro dos vídeos e instruções ao revisor |
+| `docs/` | Setup e instruções ao revisor |
 
 ## Telas
 
-| Rota | Tela | Nos vídeos? |
+| Rota | Tela | Para o revisor? |
 |---|---|---|
 | `/login` | Login por e-mail e senha | ✅ |
 | `/conexao` | Embedded Signup e status do número | ✅ |
