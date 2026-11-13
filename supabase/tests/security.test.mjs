@@ -58,7 +58,7 @@ test('front só grava colunas permitidas em campanhas e destinatários', async (
     asUser(a, `insert into public.campaigns(wa_account_id, name, template_name, template_language, total) values ('${acc}','c','t','pt_BR',999)`),
     /permission denied/,
   )
-  const camp = (await asUser(a, `insert into public.campaigns(wa_account_id, name, template_name, template_language) values ('${acc}','c','t','pt_BR') returning id`)).rows[0].id
+  const camp = (await asUser(a, `insert into public.campaigns(wa_account_id, name, template_name, template_language, list_source, consent_confirmed) values ('${acc}','c','t','pt_BR','Clientes do CRM',true) returning id`)).rows[0].id
   await assert.rejects(
     asUser(a, `insert into public.campaign_recipients(campaign_id, to_number, wa_message_id) values ('${camp}','5511','wamid.X')`),
     /permission denied/,
