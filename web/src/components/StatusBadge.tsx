@@ -31,9 +31,9 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   failed: { label: 'Falhou', tone: 'red' },
   received: { label: 'Recebida', tone: 'blue' },
   // Conta
-  connected: { label: 'Conectado', tone: 'green' },
+  connected: { label: 'Conectada', tone: 'green' },
   error: { label: 'Erro', tone: 'red' },
-  disconnected: { label: 'Desconectado', tone: 'slate' },
+  disconnected: { label: 'Desconectada', tone: 'slate' },
   // Campanhas
   draft: { label: 'Rascunho', tone: 'slate' },
   queued: { label: 'Na fila', tone: 'amber' },

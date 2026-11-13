@@ -1,4 +1,5 @@
-import { Loader2 } from 'lucide-react'
+import { Loader2, X } from 'lucide-react'
+import { useEffect } from 'react'
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
@@ -193,6 +194,47 @@ export function Alert({
     <div className={cn('rounded-lg border px-4 py-3 text-sm', tones[tone], className)}>
       {title && <p className="font-medium">{title}</p>}
       {children && <div className={cn(title && 'mt-1', 'opacity-90')}>{children}</div>}
+    </div>
+  )
+}
+
+/** Diálogo modal simples (Esc ou clique fora fecham). */
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  className,
+}: {
+  open: boolean
+  onClose: () => void
+  title: ReactNode
+  children: ReactNode
+  footer?: ReactNode
+  className?: string
+}) {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
+      <div className={cn('relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white shadow-xl', className)}>
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+          <button onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100" aria-label="Fechar">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="px-5 py-4">{children}</div>
+        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-3">{footer}</div>}
+      </div>
     </div>
   )
 }

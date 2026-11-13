@@ -2,8 +2,9 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { RedirectIfAuthed, RequireAuth } from './auth/RequireAuth'
 import { AppShell } from './components/AppShell'
 import { AccountsProvider, useAccounts } from './hooks/useAccounts'
-import { BulkPage } from './pages/BulkPage'
+import { CampaignsPage } from './pages/CampaignsPage'
 import { ConnectionPage } from './pages/ConnectionPage'
+import { ConversationsPage } from './pages/ConversationsPage'
 import { DataDeletionPage } from './pages/legal/DataDeletionPage'
 import { PrivacyPage } from './pages/legal/PrivacyPage'
 import { TermsPage } from './pages/legal/TermsPage'
@@ -17,7 +18,7 @@ import { Spinner } from './components/ui'
 function Home() {
   const { accounts, isLoading } = useAccounts()
   if (isLoading) return <Spinner />
-  return <Navigate to={accounts.length ? '/enviar' : '/conexao'} replace />
+  return <Navigate to={accounts.length ? '/enviar' : '/conexoes'} replace />
 }
 
 export default function App() {
@@ -47,11 +48,15 @@ export default function App() {
         }
       >
         <Route index element={<Home />} />
-        <Route path="conexao" element={<ConnectionPage />} />
+        <Route path="conexoes" element={<ConnectionPage />} />
         <Route path="templates" element={<TemplatesPage />} />
         <Route path="templates/novo" element={<TemplateCreatePage />} />
         <Route path="enviar" element={<SendPage />} />
-        <Route path="lote" element={<BulkPage />} />
+        <Route path="conversas" element={<ConversationsPage />} />
+        <Route path="campanhas" element={<CampaignsPage />} />
+        {/* endereços antigos */}
+        <Route path="conexao" element={<Navigate to="/conexoes" replace />} />
+        <Route path="lote" element={<Navigate to="/campanhas" replace />} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

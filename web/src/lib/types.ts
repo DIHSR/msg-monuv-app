@@ -31,11 +31,38 @@ export interface WaAccount {
   is_on_biz_app: boolean
   platform_type: string | null
   coex_sync_requested_at: string | null
+  /** Limite diário de conversas (TIER_250, TIER_2K… ou número). */
+  messaging_limit: string | null
+  quality_updated_at: string | null
+  /** Coexistência: última atividade comprovada do app WhatsApp Business no celular. */
+  last_seen_at: string | null
+  /** Preenchido pelo agendador quando o celular passa de ~10 dias sem atividade. */
+  inactivity_alert_at: string | null
+  disconnected_at: string | null
   status: AccountStatus
   webhook_subscribed: boolean
-  last_error: unknown
+  last_error: AccountIssue | Record<string, unknown> | null
   connected_at: string
   updated_at: string
+}
+
+/** Formato de wa_accounts.last_error gravado pelo n8n (eventos da Meta e falhas de conexão). */
+export interface AccountIssue {
+  event?: string
+  reason?: string
+  message?: string
+  initiated_by?: string | null
+  steps?: string[]
+  [k: string]: unknown
+}
+
+export interface WaAccountEvent {
+  id: number
+  wa_account_id: string
+  field: string
+  event: string | null
+  payload: unknown
+  occurred_at: string
 }
 
 export type TemplateStatus =
@@ -87,11 +114,17 @@ export interface Template {
 
 export type MessageStatus = 'pending' | 'accepted' | 'sent' | 'delivered' | 'read' | 'failed' | 'received'
 
+export type MessageOrigin = 'api' | 'business_app' | 'history'
+
 export interface Message {
   id: string
   wa_account_id: string
   campaign_id: string | null
   direction: 'outbound' | 'inbound'
+  /** api = sistema/Cloud API · business_app = enviada pelo celular · history = histórico do app */
+  origin: MessageOrigin
+  contact_name: string | null
+  contact_key: string | null
   to_number: string | null
   from_number: string | null
   type: string
@@ -106,6 +139,21 @@ export interface Message {
   error: unknown
   created_at: string
   updated_at: string
+}
+
+/** Linha da view `conversations`: um contato por conexão, com a última mensagem. */
+export interface Conversation {
+  wa_account_id: string
+  contact_key: string
+  contact_number: string | null
+  contact_name: string | null
+  last_direction: 'outbound' | 'inbound'
+  last_origin: MessageOrigin
+  last_type: string
+  last_preview: string | null
+  last_status: MessageStatus
+  last_at: string
+  message_count: number
 }
 
 export interface MessageStatusEvent {
@@ -129,7 +177,10 @@ export interface Campaign {
   status: CampaignStatus
   total: number
   sent_count: number
+  delivered_count: number
   failed_count: number
+  list_source: string | null
+  consent_confirmed: boolean
   created_at: string
   started_at: string | null
   finished_at: string | null
@@ -158,14 +209,4 @@ export interface SendParams {
   header_media?: { type: 'image' | 'video' | 'document'; link: string; filename?: string }
   body?: TemplateParam[]
   buttons?: { index: number; value: string }[]
-}
-
-/** Resposta padrão dos endpoints do n8n que conversam com a Meta. */
-export interface MetaCallResult<T = unknown> {
-  ok: boolean
-  request?: unknown
-  response?: unknown
-  http_status?: number
-  data?: T
-  error?: { code: string; message: string; meta_error?: unknown }
 }

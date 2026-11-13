@@ -7,8 +7,12 @@ import { storageGet, storageSet } from '../lib/utils'
 import { useRealtimeInvalidate } from './useRealtime'
 
 interface AccountsContextValue {
+  /** Todas as conexões do usuário, inclusive desconectadas (tela de Conexões). */
+  all: WaAccount[]
+  /** Conexões utilizáveis (não desconectadas): seletores das telas de envio, templates etc. */
   accounts: WaAccount[]
   isLoading: boolean
+  /** Conexão escolhida no seletor, compartilhada entre as telas. */
   active: WaAccount | null
   setActiveId: (id: string) => void
   refetch: () => void
@@ -26,11 +30,7 @@ export function AccountsProvider({ children }: { children: ReactNode }) {
     queryKey: ['wa_accounts', userId],
     enabled: !!userId,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('wa_accounts')
-        .select('*')
-        .neq('status', 'disconnected')
-        .order('connected_at', { ascending: false })
+      const { data, error } = await supabase.from('wa_accounts').select('*').order('connected_at', { ascending: false })
       if (error) throw error
       return data as WaAccount[]
     },
@@ -39,9 +39,11 @@ export function AccountsProvider({ children }: { children: ReactNode }) {
   useRealtimeInvalidate('wa_accounts', userId ? `user_id=eq.${userId}` : null, [['wa_accounts', userId]])
 
   const value = useMemo<AccountsContextValue>(() => {
-    const accounts = q.data ?? []
+    const all = q.data ?? []
+    const accounts = all.filter((a) => a.status !== 'disconnected')
     const active = accounts.find((a) => a.id === activeId) ?? accounts[0] ?? null
     return {
+      all,
       accounts,
       isLoading: q.isLoading,
       active,

@@ -35,6 +35,7 @@ function JsonBlock({
   placeholder,
   badge,
   className,
+  compact = false,
 }: {
   title: string
   subtitle?: ReactNode
@@ -42,6 +43,8 @@ function JsonBlock({
   placeholder: string
   badge?: ReactNode
   className?: string
+  /** Altura menor: os dois blocos cabem na tela um embaixo do outro. */
+  compact?: boolean
 }) {
   const [copied, setCopied] = useState(false)
   const has = value !== undefined && value !== null
@@ -78,7 +81,12 @@ function JsonBlock({
           {copied ? 'Copiado' : 'Copiar'}
         </button>
       </div>
-      <pre className="max-h-[28rem] min-h-40 flex-1 overflow-auto p-4 font-mono text-[12.5px] leading-relaxed text-slate-200">
+      <pre
+        className={cn(
+          'flex-1 overflow-auto p-4 font-mono text-[12.5px] leading-relaxed text-slate-200',
+          compact ? 'max-h-72 min-h-24' : 'max-h-[28rem] min-h-40',
+        )}
+      >
         {has ? highlight(text) : <span className="text-slate-500">{placeholder}</span>}
       </pre>
     </div>
@@ -113,6 +121,7 @@ export function JsonPanel({
   responseSubtitle,
   requestPlaceholder = '// O payload aparecerá aqui',
   responsePlaceholder = '// Aguardando envio…',
+  stacked = false,
   className,
 }: {
   request?: unknown
@@ -124,12 +133,15 @@ export function JsonPanel({
   responseSubtitle?: ReactNode
   requestPlaceholder?: string
   responsePlaceholder?: string
+  /** Um bloco embaixo do outro (coluna estreita), em vez de lado a lado. */
+  stacked?: boolean
   className?: string
 }) {
   return (
-    <div className={cn('grid gap-4 lg:grid-cols-2', className)}>
-      <JsonBlock title={requestLabel} subtitle={requestSubtitle} value={request} placeholder={requestPlaceholder} />
+    <div className={cn('grid gap-4', !stacked && 'lg:grid-cols-2', className)}>
+      <JsonBlock title={requestLabel} subtitle={requestSubtitle} value={request} placeholder={requestPlaceholder} compact={stacked} />
       <JsonBlock
+        compact={stacked}
         title={responseLabel}
         subtitle={responseSubtitle}
         value={response}

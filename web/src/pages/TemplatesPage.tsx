@@ -5,11 +5,12 @@ import { toast } from 'sonner'
 import { JsonPanel } from '../components/JsonPanel'
 import { StatusBadge } from '../components/StatusBadge'
 import { TemplatePreview } from '../components/TemplatePreview'
+import { ConnectionBar, NoConnection } from '../components/ConnectionSelect'
 import { Alert, Button, Card, CardHeader, EmptyState, Input, PageHeader, Spinner } from '../components/ui'
 import { useAccounts } from '../hooks/useAccounts'
 import { useTemplates } from '../hooks/useTemplates'
-import { ApiError, callN8n, errorMessage } from '../lib/api'
-import type { MetaCallResult, Template } from '../lib/types'
+import { ApiError, callN8n, errorMessage, type ApiResult } from '../lib/api'
+import type { Template } from '../lib/types'
 import { cn, formatDateTime } from '../lib/utils'
 
 const FILTERS = [
@@ -33,7 +34,7 @@ export function TemplatesPage() {
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Template | null>(null)
   const [syncing, setSyncing] = useState(false)
-  const [lastSync, setLastSync] = useState<MetaCallResult | null>(null)
+  const [lastSync, setLastSync] = useState<ApiResult | null>(null)
 
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase()
@@ -58,11 +59,11 @@ export function TemplatesPage() {
     if (!active) return
     setSyncing(true)
     try {
-      const r = await callN8n<MetaCallResult<{ count: number }>>('templates.sync', { wa_account_id: active.id })
+      const r = await callN8n<ApiResult<{ count: number }>>('templates.sync', { wa_account_id: active.id })
       setLastSync(r)
       toast.success(`${r.data?.count ?? 0} templates sincronizados com a Meta.`)
     } catch (err) {
-      if (err instanceof ApiError) setLastSync(err.body as MetaCallResult)
+      if (err instanceof ApiError) setLastSync(err.body)
       toast.error(errorMessage(err))
     } finally {
       setSyncing(false)
@@ -76,18 +77,7 @@ export function TemplatesPage() {
     return (
       <div>
         <PageHeader title="Templates" />
-        <Card>
-          <EmptyState
-            icon={<FileText className="size-6" />}
-            title="Conecte um número primeiro"
-            description="Os templates pertencem à sua conta do WhatsApp Business (WABA)."
-            action={
-              <Link to="/conexao">
-                <Button>Ir para Conexão</Button>
-              </Link>
-            }
-          />
-        </Card>
+        <NoConnection description="Os templates pertencem à conta do WhatsApp Business (WABA) de cada conexão." />
       </div>
     )
   }
@@ -96,11 +86,11 @@ export function TemplatesPage() {
     <div>
       <PageHeader
         title="Templates de mensagem"
-        description="Modelos aprovados pela Meta para iniciar conversas. O status é atualizado automaticamente quando a Meta conclui a análise."
+        description="Modelos da WABA da conexão escolhida. O status é atualizado automaticamente quando a Meta conclui a análise."
         actions={
           <>
             <Button variant="secondary" onClick={sync} loading={syncing}>
-              {!syncing && <RefreshCw className="size-4" />} Sincronizar com a Meta
+              {!syncing && <RefreshCw className="size-4" />} Sincronizar
             </Button>
             <Link to="/templates/novo">
               <Button>
@@ -110,6 +100,8 @@ export function TemplatesPage() {
           </>
         }
       />
+
+      <ConnectionBar />
 
       <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
         <Card className="min-w-0">
@@ -173,6 +165,11 @@ export function TemplatesPage() {
                       <td className="px-4 py-3 text-slate-600">{t.language}</td>
                       <td className="px-4 py-3">
                         <StatusBadge status={t.status} />
+                        {t.status === 'REJECTED' && t.rejected_reason && (
+                          <p className="mt-1 max-w-56 truncate text-xs text-red-700" title={t.rejected_reason}>
+                            {t.rejected_reason}
+                          </p>
+                        )}
                       </td>
                       <td className="hidden px-4 py-3 text-slate-500 md:table-cell">{formatDateTime(t.updated_at)}</td>
                     </tr>
@@ -240,7 +237,7 @@ export function TemplatesPage() {
 
       {lastSync && (
         <Card className="mt-6">
-          <CardHeader title="Última sincronização" description="Chamada GET /{waba_id}/message_templates feita pelo n8n." />
+          <CardHeader title="Última sincronização" description="Chamada GET /{waba_id}/message_templates feita pelo servidor (primeira página)." />
           <div className="p-5">
             <JsonPanel request={lastSync.request} response={lastSync.response} httpStatus={lastSync.http_status} requestLabel="Requisição" />
           </div>

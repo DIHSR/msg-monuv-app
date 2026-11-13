@@ -3,14 +3,17 @@ import { ArrowLeft, Plus, Send, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { ConnectionSelect, NoConnection } from '../components/ConnectionSelect'
 import { JsonPanel } from '../components/JsonPanel'
 import { StatusBadge } from '../components/StatusBadge'
 import { TemplatePreview } from '../components/TemplatePreview'
 import { Alert, Button, Card, CardHeader, Field, Input, PageHeader, Select, Textarea } from '../components/ui'
 import { useAccounts } from '../hooks/useAccounts'
-import { ApiError, callN8n, errorMessage } from '../lib/api'
+import { useTemplates } from '../hooks/useTemplates'
+import { ApiError, callN8n, errorMessage, type ApiResult } from '../lib/api'
 import {
   buildCreatePayload,
+  CATEGORIES,
   draftToComponents,
   emptyDraft,
   extractVars,
@@ -19,17 +22,69 @@ import {
   type ButtonDraft,
   type TemplateDraft,
 } from '../lib/templates'
-import type { MetaCallResult } from '../lib/types'
+import { cn, formatDateTime } from '../lib/utils'
 
-interface CreateResult extends MetaCallResult<{ id?: string; status?: string; category?: string }> {}
+type CreateResult = ApiResult<{ id?: string; status?: string; category?: string }>
+
+/** Lista da conexão depois de criar: o novo template aparece como PENDING (fim do vídeo 2). */
+function ConnectionTemplates({ accountId, highlight }: { accountId: string; highlight: string | null }) {
+  const { data: templates = [], isLoading } = useTemplates(accountId)
+  return (
+    <Card className="mt-6">
+      <CardHeader
+        title="Templates desta conexão"
+        description="Atualiza sozinho quando a Meta conclui a análise."
+        actions={
+          <Link to="/templates">
+            <Button variant="secondary" size="sm">
+              Abrir lista completa
+            </Button>
+          </Link>
+        }
+      />
+      {isLoading ? (
+        <p className="px-5 py-6 text-sm text-slate-500">Carregando…</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 text-left text-xs font-medium uppercase tracking-wider text-slate-500">
+                <th className="px-4 py-3">Nome</th>
+                <th className="px-4 py-3">Categoria</th>
+                <th className="px-4 py-3">Idioma</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="hidden px-4 py-3 md:table-cell">Atualizado</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {templates.slice(0, 8).map((t) => (
+                <tr key={t.id} className={cn(t.name === highlight && 'bg-amber-50')}>
+                  <td className="px-4 py-3 font-mono text-[13px] text-slate-900">{t.name}</td>
+                  <td className="px-4 py-3 text-slate-600">{t.category}</td>
+                  <td className="px-4 py-3 text-slate-600">{t.language}</td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={t.status} />
+                  </td>
+                  <td className="hidden px-4 py-3 text-slate-500 md:table-cell">{formatDateTime(t.updated_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  )
+}
 
 export function TemplateCreatePage() {
-  const { active } = useAccounts()
+  const { accounts, active } = useAccounts()
   const qc = useQueryClient()
   const [d, setD] = useState<TemplateDraft>(emptyDraft)
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<CreateResult | null>(null)
+  const [createdName, setCreatedName] = useState<string | null>(null)
   const [showErrors, setShowErrors] = useState(false)
+  const isAuth = d.category === 'AUTHENTICATION'
 
   const set = <K extends keyof TemplateDraft>(k: K, v: TemplateDraft[K]) => setD((p) => ({ ...p, [k]: v }))
 
@@ -65,11 +120,11 @@ export function TemplateCreatePage() {
     try {
       const r = await callN8n<CreateResult>('templates.create', { wa_account_id: active.id, template: payload })
       setResult(r)
+      setCreatedName(payload.name)
       toast.success('Template enviado para análise da Meta.')
       qc.invalidateQueries({ queryKey: ['templates', active.id] })
     } catch (err) {
-      if (err instanceof ApiError) setResult(err.body as CreateResult)
-      toast.error(errorMessage(err))
+      setResult(err instanceof ApiError && err.body ? (err.body as CreateResult) : { ok: false, error: { code: 'network', message: errorMessage(err) } })
     } finally {
       setSubmitting(false)
     }
@@ -85,17 +140,14 @@ export function TemplateCreatePage() {
         description="O template é enviado para análise da Meta. A aprovação costuma levar de alguns minutos a 24 horas."
       />
 
-      {!active && (
-        <Alert tone="warning" className="mb-6">
-          Conecte um número na tela de <Link to="/conexao" className="underline">Conexão</Link> antes de criar templates.
-        </Alert>
-      )}
+      {!accounts.length && <NoConnection description="O template é criado na WABA de uma conexão. Conecte um número primeiro." />}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
         <div className="min-w-0 space-y-6">
           <Card>
             <CardHeader title="Informações básicas" />
             <div className="grid gap-4 p-5 sm:grid-cols-3">
+              <ConnectionSelect label="Conexão (WABA onde o template será criado)" id="tpl-conn" className="sm:col-span-3" />
               <Field label="Nome" hint="minúsculas, números e _" className="sm:col-span-3" htmlFor="tpl-name">
                 <Input
                   id="tpl-name"
@@ -107,8 +159,11 @@ export function TemplateCreatePage() {
               </Field>
               <Field label="Categoria" htmlFor="tpl-cat">
                 <Select id="tpl-cat" value={d.category} onChange={(e) => set('category', e.target.value as TemplateDraft['category'])}>
-                  <option value="UTILITY">Utilidade</option>
-                  <option value="MARKETING">Marketing</option>
+                  {CATEGORIES.map((c) => (
+                    <option key={c.value} value={c.value} title={c.hint}>
+                      {c.label}
+                    </option>
+                  ))}
                 </Select>
               </Field>
               <Field label="Idioma" htmlFor="tpl-lang" className="sm:col-span-2">
@@ -123,6 +178,33 @@ export function TemplateCreatePage() {
             </div>
           </Card>
 
+          {isAuth && (
+            <Card>
+              <CardHeader
+                title="Código de verificação"
+                description="Em templates de autenticação o texto é padrão da Meta: “{{1}} é seu código de verificação.”"
+              />
+              <div className="grid gap-4 p-5 sm:grid-cols-2">
+                <label className="flex items-start gap-2 text-sm text-slate-700 sm:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={d.authSecurity}
+                    onChange={(e) => set('authSecurity', e.target.checked)}
+                    className="mt-0.5 size-4 accent-brand-700"
+                  />
+                  Adicionar a recomendação de segurança (“Para sua segurança, não o compartilhe.”)
+                </label>
+                <Field label="Validade do código (minutos)" hint="Opcional, de 1 a 90. Aparece no rodapé." htmlFor="tpl-exp">
+                  <Input id="tpl-exp" inputMode="numeric" value={d.authExpiryMinutes} onChange={(e) => set('authExpiryMinutes', e.target.value.replace(/\D/g, ''))} />
+                </Field>
+                <Field label="Texto do botão de copiar" hint={`${d.authButtonText.length}/25`} htmlFor="tpl-btn">
+                  <Input id="tpl-btn" value={d.authButtonText} maxLength={25} onChange={(e) => set('authButtonText', e.target.value)} />
+                </Field>
+              </div>
+            </Card>
+          )}
+
+          {!isAuth && (<>
           <Card>
             <CardHeader title="Conteúdo" description="Use {{1}}, {{2}}… para variáveis. *negrito* e _itálico_ são suportados." />
             <div className="space-y-5 p-5">
@@ -238,6 +320,7 @@ export function TemplateCreatePage() {
               </div>
             )}
           </Card>
+          </>)}
         </div>
 
         <div className="min-w-0">
@@ -261,13 +344,23 @@ export function TemplateCreatePage() {
               {!submitting && <Send className="size-4" />} Enviar para aprovação
             </Button>
             {result?.ok && result.data && (
-              <Alert tone="success" title="Template criado">
-                <div className="flex items-center gap-2">
-                  Status inicial: <StatusBadge status={result.data.status} />
+              <Alert tone="success" title="Template criado na Meta">
+                <p>
+                  ID: <code className="font-mono text-xs">{result.data.id}</code>
+                </p>
+                <div className="mt-1 flex items-center gap-2">
+                  Status inicial: <StatusBadge status={result.data.status ?? 'PENDING'} />
                 </div>
-                <Link to="/templates" className="mt-1 inline-block underline">
-                  Acompanhar na lista
-                </Link>
+              </Alert>
+            )}
+            {result && !result.ok && (
+              <Alert tone="error" title={result.error?.code === 'internal' ? 'Erro interno' : 'A criação falhou'}>
+                <p className="break-words">{result.error?.message}</p>
+                {result.error?.ref && (
+                  <p className="mt-1 text-xs">
+                    Referência para o suporte: <code className="font-mono">{result.error.ref}</code>
+                  </p>
+                )}
               </Alert>
             )}
           </div>
@@ -285,13 +378,16 @@ export function TemplateCreatePage() {
         />
         <div className="p-5">
           <JsonPanel
-            request={result?.request ?? payload}
+            request={result?.request}
             response={result?.response}
             httpStatus={result?.http_status}
-            requestSubtitle={result ? 'enviado' : 'prévia — atualiza enquanto você edita'}
+            requestPlaceholder="// O payload enviado à Meta aparecerá aqui depois do envio"
+            responsePlaceholder="// A resposta da Meta aparecerá aqui"
           />
         </div>
       </Card>
+
+      {active && createdName && <ConnectionTemplates accountId={active.id} highlight={createdName} />}
     </div>
   )
 }

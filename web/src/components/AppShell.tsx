@@ -1,10 +1,10 @@
-import { FileText, Layers, LogOut, Menu, Plug, Send, X } from 'lucide-react'
+import { AlertTriangle, FileText, Layers, LogOut, Menu, MessagesSquare, Plug, Send, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { useAccounts } from '../hooks/useAccounts'
+import { inactivityDays } from '../lib/accounts'
 import { cn, formatPhone } from '../lib/utils'
-import { Select } from './ui'
 
 function Logo() {
   return (
@@ -23,14 +23,18 @@ function Logo() {
 
 export function AppShell() {
   const { session, profile, signOut } = useAuth()
-  const { accounts, active, setActiveId } = useAccounts()
+  const { accounts } = useAccounts()
   const [open, setOpen] = useState(false)
+  // Lacuna 3: conexões em coexistência perto de cair por inatividade do celular
+  const inactive = accounts.filter((a) => inactivityDays(a) !== null)
 
   const nav = [
-    { to: '/conexao', label: 'Conexão', icon: Plug },
+    { to: '/conexoes', label: 'Conexões', icon: Plug },
     { to: '/templates', label: 'Templates', icon: FileText },
     { to: '/enviar', label: 'Enviar mensagem', icon: Send },
-    ...(profile?.is_demo ? [] : [{ to: '/lote', label: 'Envio em lote', icon: Layers }]),
+    { to: '/conversas', label: 'Conversas', icon: MessagesSquare },
+    // Campanhas não entram nos vídeos do App Review e ficam ocultas para a conta demo
+    ...(profile?.is_demo ? [] : [{ to: '/campanhas', label: 'Campanhas', icon: Layers }]),
   ]
 
   const sidebar = (
@@ -41,26 +45,6 @@ export function AppShell() {
           <X className="size-5" />
         </button>
       </div>
-
-      {accounts.length > 0 && (
-        <div className="px-4 pb-4">
-          <p className="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Número ativo</p>
-          {accounts.length > 1 ? (
-            <Select value={active?.id ?? ''} onChange={(e) => setActiveId(e.target.value)} className="h-9 text-[13px]">
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.verified_name ?? 'Sem nome'} · {formatPhone(a.display_phone_number)}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="truncate text-[13px] font-medium text-slate-800">{active?.verified_name ?? 'Sem nome'}</p>
-              <p className="font-mono text-[12px] text-slate-500">{formatPhone(active?.display_phone_number)}</p>
-            </div>
-          )}
-        </div>
-      )}
 
       <nav className="flex-1 space-y-0.5 px-3">
         {nav.map((n) => (
@@ -123,6 +107,19 @@ export function AppShell() {
           <Logo />
         </header>
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          {inactive.length > 0 && (
+            <Link
+              to="/conexoes"
+              className="mb-6 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 hover:bg-amber-100"
+            >
+              <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600" />
+              <span>
+                <strong>Abra o WhatsApp Business no celular</strong> de{' '}
+                {inactive.map((a) => formatPhone(a.display_phone_number)).join(', ')}: sem atividade há {inactive.map((a) => inactivityDays(a)).join(', ')}{' '}
+                dias. A Meta desconecta a coexistência com cerca de 14 dias.
+              </span>
+            </Link>
+          )}
           <Outlet />
         </main>
       </div>

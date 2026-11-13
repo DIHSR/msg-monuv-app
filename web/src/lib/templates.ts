@@ -103,9 +103,11 @@ export type ButtonDraft =
   | { type: 'URL'; text: string; url: string; example: string }
   | { type: 'PHONE_NUMBER'; text: string; phone_number: string }
 
+export type TemplateCategory = 'UTILITY' | 'MARKETING' | 'AUTHENTICATION'
+
 export interface TemplateDraft {
   name: string
-  category: 'UTILITY' | 'MARKETING'
+  category: TemplateCategory
   language: string
   headerType: 'NONE' | 'TEXT' | 'IMAGE' | 'DOCUMENT' | 'VIDEO'
   headerText: string
@@ -115,6 +117,10 @@ export interface TemplateDraft {
   bodyExamples: Record<string, string>
   footer: string
   buttons: ButtonDraft[]
+  /** AUTHENTICATION: o texto é fixo da Meta; só estas opções são configuráveis. */
+  authSecurity: boolean
+  authExpiryMinutes: string
+  authButtonText: string
 }
 
 export const emptyDraft: TemplateDraft = {
@@ -129,6 +135,27 @@ export const emptyDraft: TemplateDraft = {
   bodyExamples: {},
   footer: '',
   buttons: [],
+  authSecurity: true,
+  authExpiryMinutes: '10',
+  authButtonText: 'Copiar código',
+}
+
+export const CATEGORIES: { value: TemplateCategory; label: string; hint: string }[] = [
+  { value: 'UTILITY', label: 'Utilidade', hint: 'Confirmações, atualizações de pedido, lembretes.' },
+  { value: 'MARKETING', label: 'Marketing', hint: 'Ofertas, novidades e promoções.' },
+  { value: 'AUTHENTICATION', label: 'Autenticação', hint: 'Código de verificação (texto padrão da Meta).' },
+]
+
+/** Template de autenticação: texto do corpo definido pela Meta, com código copiável. */
+function buildAuthPayload(d: TemplateDraft) {
+  const components: Record<string, unknown>[] = [{ type: 'BODY', add_security_recommendation: d.authSecurity }]
+  const minutes = Number(d.authExpiryMinutes)
+  if (d.authExpiryMinutes.trim() && Number.isInteger(minutes)) components.push({ type: 'FOOTER', code_expiration_minutes: minutes })
+  components.push({
+    type: 'BUTTONS',
+    buttons: [{ type: 'OTP', otp_type: 'COPY_CODE', ...(d.authButtonText.trim() ? { text: d.authButtonText.trim() } : {}) }],
+  })
+  return { name: d.name, language: d.language, category: 'AUTHENTICATION', components }
 }
 
 export const LANGUAGES = [
@@ -147,6 +174,7 @@ export function isNamedFormat(vars: string[]) {
 
 /** Converte o rascunho do formulário no payload de POST /{waba_id}/message_templates. */
 export function buildCreatePayload(d: TemplateDraft) {
+  if (d.category === 'AUTHENTICATION') return buildAuthPayload(d)
   const components: Record<string, unknown>[] = []
   const bodyVars = extractVars(d.body)
   const headerVars = d.headerType === 'TEXT' ? extractVars(d.headerText) : []
@@ -203,12 +231,29 @@ export function buildCreatePayload(d: TemplateDraft) {
 
 /** Converte o rascunho em componentes para a prévia visual. */
 export function draftToComponents(d: TemplateDraft): TemplateComponent[] {
+  if (d.category === 'AUTHENTICATION') {
+    const minutes = d.authExpiryMinutes.trim()
+    return [
+      {
+        type: 'BODY',
+        text: `*{{1}}* é seu código de verificação.${d.authSecurity ? ' Para sua segurança, não o compartilhe.' : ''}`,
+      },
+      ...(minutes ? [{ type: 'FOOTER' as const, text: `Este código expira em ${minutes} minutos.` }] : []),
+      { type: 'BUTTONS', buttons: [{ type: 'COPY_CODE', text: d.authButtonText.trim() || 'Copiar código' }] },
+    ]
+  }
   return buildCreatePayload(d).components as unknown as TemplateComponent[]
 }
 
 export function validateDraft(d: TemplateDraft): string[] {
   const errs: string[] = []
   if (!TEMPLATE_NAME_RE.test(d.name)) errs.push('Nome: use apenas letras minúsculas, números e "_".')
+  if (d.category === 'AUTHENTICATION') {
+    const m = Number(d.authExpiryMinutes)
+    if (d.authExpiryMinutes.trim() && (!Number.isInteger(m) || m < 1 || m > 90)) errs.push('Validade do código: de 1 a 90 minutos.')
+    if (d.authButtonText.length > 25) errs.push('Texto do botão: máximo 25 caracteres.')
+    return errs
+  }
   if (!d.body.trim()) errs.push('O corpo da mensagem é obrigatório.')
   if (d.body.length > 1024) errs.push('O corpo pode ter no máximo 1024 caracteres.')
   const bodyVars = extractVars(d.body)

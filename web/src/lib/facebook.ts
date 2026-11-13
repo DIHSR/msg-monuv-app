@@ -16,8 +16,8 @@ const ES_ORIGINS = new Set(['https://www.facebook.com', 'https://web.facebook.co
 export function loadFacebookSdk(): Promise<any> {
   if (sdkPromise) return sdkPromise
   sdkPromise = new Promise((resolve, reject) => {
-    if (!config.fbAppId) {
-      reject(new Error('VITE_FB_APP_ID não configurado.'))
+    if (!config.metaAppId) {
+      reject(new Error('VITE_META_APP_ID não configurado.'))
       return
     }
     if (window.FB) {
@@ -26,7 +26,7 @@ export function loadFacebookSdk(): Promise<any> {
     }
     window.fbAsyncInit = () => {
       window.FB.init({
-        appId: config.fbAppId,
+        appId: config.metaAppId,
         autoLogAppEvents: true,
         xfbml: false,
         version: config.graphVersion,
@@ -75,6 +75,22 @@ function wabaIdFrom(info: SessionInfoData | null): string | null {
   return ids ? String(ids) : null
 }
 
+/**
+ * Parâmetros do Embedded Signup — COEXISTÊNCIA LIGADA.
+ *
+ * A spec v2 (seção 5) pede `featureType: 'whatsapp_business_app_onboarding'` + `sessionInfoVersion: '3'`.
+ * Esse formato é o da v2/v3 do Embedded Signup, que a Meta descontinuou em 15/10/2026 (pedidos nesse
+ * formato passaram a ser atendidos como v4). Na v5 (20/10/2026) o onboarding de quem usa o app
+ * WhatsApp Business (coexistência) vem LIGADO POR PADRÃO e `featureType`/`sessionInfoVersion` não são
+ * mais entradas; desligar exigiria `features: [{ name: 'whatsapp_business_app_onboarding', enabled: false }]`,
+ * o que NÃO fazemos. Ou seja: a intenção da spec (número continua no celular) está garantida aqui.
+ * Docs: developers.facebook.com/docs/whatsapp/embedded-signup/versions
+ */
+export const EMBEDDED_SIGNUP_EXTRAS = {
+  setup: {},
+  version: 'v5',
+} as const
+
 export class EmbeddedSignupCancelled extends Error {
   step: string | null
   constructor(step: string | null) {
@@ -92,7 +108,7 @@ export class EmbeddedSignupCancelled extends Error {
  * (postMessage WA_EMBEDDED_SIGNUP com messaging_account_ids / phone_number_id).
  */
 export async function launchEmbeddedSignup(): Promise<EmbeddedSignupResult> {
-  if (!config.fbEsConfigId) throw new Error('VITE_FB_ES_CONFIG_ID não configurado.')
+  if (!config.metaConfigId) throw new Error('VITE_META_CONFIG_ID não configurado.')
   const FB = await loadFacebookSdk()
 
   return new Promise((resolve, reject) => {
@@ -177,15 +193,10 @@ export async function launchEmbeddedSignup(): Promise<EmbeddedSignupResult> {
         }
       },
       {
-        config_id: config.fbEsConfigId,
+        config_id: config.metaConfigId,
         response_type: 'code',
         override_default_response_type: true,
-        // Produtos e permissões vêm da configuração do Facebook Login for Business (config_id).
-        // v5: coexistência ligada por padrão; session info sempre enviado (sem sessionInfoVersion).
-        extras: {
-          setup: {},
-          version: 'v5',
-        },
+        extras: EMBEDDED_SIGNUP_EXTRAS,
       },
     )
   })
