@@ -12,6 +12,8 @@ const ENV = {
   GRAPH_VERSION: $env.MONUV_GRAPH_VERSION || 'v24.0',
   // Coexistência: pedir à Meta contatos + histórico (até 180 dias) do app WhatsApp Business no onboarding
   COEX_SYNC: String($env.MONUV_COEX_SYNC || '').toLowerCase() === 'true',
+  // Chave AES-256-GCM (32 bytes em base64) que cifra token e PIN dos clientes antes de irem ao Supabase
+  TOKEN_KEY: $env.MONUV_TOKEN_ENCRYPTION_KEY,
 };
 const GRAPH = `https://graph.facebook.com/${ENV.GRAPH_VERSION}`;
 const helpers = this.helpers;
@@ -115,10 +117,57 @@ async function authUser(req) {
   return r.body;
 }
 
-/** Contexto do usuário (profile + conta WhatsApp + token). Nunca devolva `token` na resposta. */
+// ---------------------------------------------------------------- Segredos dos clientes (lacuna 4)
+// Token e PIN são cifrados AQUI, com AES-256-GCM, antes de irem ao Supabase (que ainda os guarda no Vault).
+// Quem tiver só um dump do banco ou só a service_role key não consegue usar o token: falta a chave do n8n.
+// Formato: "enc:v1:" + base64(iv[12] | tag[16] | texto cifrado). AAD = conta + tipo, então um segredo
+// copiado para outra conta não decifra.
+const SECRET_PREFIX = 'enc:v1:';
+
+function secretKey() {
+  const raw = ENV.TOKEN_KEY ? Buffer.from(String(ENV.TOKEN_KEY), 'base64') : null;
+  if (!raw || raw.length !== 32) {
+    throw new HttpError(500, 'config', 'MONUV_TOKEN_ENCRYPTION_KEY ausente ou inválida (gere com: openssl rand -base64 32).');
+  }
+  return raw;
+}
+
+function sealSecret(plain, accountId, kind) {
+  const c = require('crypto');
+  const iv = c.randomBytes(12);
+  const cipher = c.createCipheriv('aes-256-gcm', secretKey(), iv);
+  cipher.setAAD(Buffer.from(`wa:${accountId}:${kind}`, 'utf8'));
+  const ct = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
+  return SECRET_PREFIX + Buffer.concat([iv, cipher.getAuthTag(), ct]).toString('base64');
+}
+
+function openSecret(stored, accountId, kind) {
+  if (!stored) return null;
+  // Legado: segredo gravado antes da cifragem no n8n. Continua funcionando até a próxima reconexão.
+  if (!String(stored).startsWith(SECRET_PREFIX)) return String(stored);
+  const c = require('crypto');
+  const buf = Buffer.from(String(stored).slice(SECRET_PREFIX.length), 'base64');
+  try {
+    const decipher = c.createDecipheriv('aes-256-gcm', secretKey(), buf.subarray(0, 12));
+    decipher.setAAD(Buffer.from(`wa:${accountId}:${kind}`, 'utf8'));
+    decipher.setAuthTag(buf.subarray(12, 28));
+    return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString('utf8');
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(500, 'secret_decrypt', 'Não foi possível decifrar o token da conexão (chave trocada?).');
+  }
+}
+
+/** Grava token/PIN cifrado. Nunca grava texto puro: sem chave, falha antes. */
+async function storeSecret(accountId, kind, value) {
+  return rpc('wa_store_secret', { p_wa_account_id: accountId, p_kind: kind, p_value: sealSecret(value, accountId, kind) });
+}
+
+/** Contexto do usuário (profile + conta WhatsApp + token decifrado). Nunca devolva `token` na resposta. */
 async function userContext(userId, waAccountId, { requireAccount = true } = {}) {
   const ctx = await rpc('n8n_user_context', { p_user_id: userId, p_wa_account_id: waAccountId || null });
   if (!ctx || !ctx.ok) throw new HttpError(403, 'no_profile', 'Perfil não encontrado.');
+  ctx.token = ctx.account && ctx.token ? openSecret(ctx.token, ctx.account.id, 'token') : null;
   if (!ctx.can_use_app) throw new HttpError(403, 'plan_expired', 'Seu acesso está suspenso ou o período de teste terminou.');
   if (requireAccount) {
     if (!ctx.account) throw new HttpError(404, 'no_account', 'Nenhum número do WhatsApp conectado.');
@@ -194,6 +243,23 @@ function onlyDigits(v) {
 // ---------------------------------------------------------------- Número de telefone
 const PHONE_FIELDS =
   'display_phone_number,verified_name,quality_rating,code_verification_status,name_status,status,is_on_biz_app,platform_type';
+
+/**
+ * Limite diário de conversas do número (lacuna 2). Chamada separada e best-effort: o campo é novo
+ * (substitui messaging_limit_tier) e, se a versão da Graph não o conhecer, não pode derrubar o resto.
+ */
+async function fetchMessagingLimit(phoneId, token) {
+  const g = await graph('GET', `/${phoneId}`, { token, qs: { fields: 'whatsapp_business_manager_messaging_limit' } });
+  const v = g.ok && g.response ? g.response.whatsapp_business_manager_messaging_limit : null;
+  return { step: step('messaging_limit', g), limit: v == null ? null : String(v) };
+}
+
+/** O app da Monuv aparece na resposta de GET /{waba_id}/subscribed_apps? */
+function appIsSubscribed(g) {
+  return !!(g.ok && g.response && (g.response.data || []).some(
+    (a) => String((a.whatsapp_business_api_data || {}).id) === String(ENV.APP_ID),
+  ));
+}
 
 /** Converte a resposta de GET /{phone_number_id} nas colunas de wa_accounts. */
 function phoneColumns(p) {

@@ -17,6 +17,8 @@ export const ENV = {
   MONUV_SUPABASE_URL: 'http://sb',
   MONUV_SUPABASE_SERVICE_ROLE_KEY: 'k',
   MONUV_GRAPH_VERSION: 'v24.0',
+  // 32 bytes em base64 (só para teste)
+  MONUV_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
 }
 
 /** O workflow único gerado por n8n/build.mjs. */

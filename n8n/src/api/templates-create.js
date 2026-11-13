@@ -11,6 +11,18 @@ try {
   if (!['UTILITY', 'MARKETING', 'AUTHENTICATION'].includes(t.category)) throw new HttpError(400, 'bad_request', 'Categoria inválida.');
   if (!t.language || !Array.isArray(t.components)) throw new HttpError(400, 'bad_request', 'Idioma e componentes são obrigatórios.');
 
+  // {{1}}, {{2}}… no corpo exigem example.body_text com EXATAMENTE a mesma quantidade (senão a Meta rejeita)
+  const bodyC = t.components.find((c) => c && String(c.type).toUpperCase() === 'BODY');
+  const positional = bodyC && typeof bodyC.text === 'string'
+    ? new Set([...bodyC.text.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => m[1])).size
+    : 0;
+  if (positional && t.parameter_format !== 'NAMED') {
+    const ex = bodyC.example && Array.isArray(bodyC.example.body_text) && bodyC.example.body_text[0];
+    if (!Array.isArray(ex) || ex.length !== positional) {
+      throw new HttpError(400, 'bad_request', `O corpo tem ${positional} variável(is); example.body_text precisa de ${positional} exemplo(s).`);
+    }
+  }
+
   const payload = {
     name: t.name,
     language: t.language,

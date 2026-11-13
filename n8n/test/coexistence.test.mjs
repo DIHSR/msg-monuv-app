@@ -13,6 +13,7 @@ const esRoutes = ({ phone = {}, phoneOk = true } = {}) => [
   [is('GET', '/phone_numbers'), ok({ data: [{ id: 'PN_A' }] })],
   [is('GET', '/rest/v1/wa_accounts'), ok([])],
   [is('POST', '/subscribed_apps'), ok({ success: true })],
+  [is('GET', '/subscribed_apps'), ok({ data: [{ whatsapp_business_api_data: { id: 'APPID', name: 'Monuv' } }] })],
   [is('POST', '/register'), ok({ success: true })],
   [is('POST', '/smb_app_data'), ok({ messaging_product: 'whatsapp', request_id: 'REQ' })],
   [is('POST', '/rpc/claim_wa_account'), (o) => ok({ ok: true, account: { id: 'acc-1', status: o.body.p_row.status, is_on_biz_app: o.body.p_row.is_on_biz_app } })],
@@ -127,7 +128,7 @@ for (const ev of ['PARTNER_REMOVED', 'ACCOUNT_OFFBOARDED']) {
   test(`account_update ${ev}: contas da WABA ficam desconectadas`, async () => {
     const m = await run({ object: 'whatsapp_business_account', entry: [{ id: 'WABA_A', changes: [{ field: 'account_update', value: { event: ev } }] }] })
     const patch = m.calls.find((c) => c.method === 'PATCH' && c.url.includes('/rest/v1/wa_accounts'))
-    assert.match(patch.url, /waba_id=eq\.WABA_A/)
+    assert.match(patch.url, /id=in\.\(acc-A\)/)
     assert.equal(patch.body.status, 'disconnected')
   })
 }

@@ -6,9 +6,15 @@ try {
   const campaignId = String(body.campaign_id || '');
   if (!/^[0-9a-f-]{36}$/i.test(campaignId)) throw new HttpError(400, 'bad_request', 'campaign_id inválido.');
 
-  const [camp] = await sb('GET', `/rest/v1/campaigns?id=eq.${campaignId}&user_id=eq.${user.id}&select=id,wa_account_id,status`);
+  const [camp] = await sb(
+    'GET',
+    `/rest/v1/campaigns?id=eq.${campaignId}&user_id=eq.${user.id}&select=id,wa_account_id,status,list_source,consent_confirmed`,
+  );
   if (!camp) throw new HttpError(404, 'not_found', 'Campanha não encontrada.');
   if (camp.status !== 'draft') throw new HttpError(409, 'invalid_state', `Campanha já está em "${camp.status}".`);
+  if (!camp.consent_confirmed || String(camp.list_source || '').trim().length < 3) {
+    throw new HttpError(422, 'consent_required', 'Informe a origem da lista e confirme o consentimento dos destinatários.');
+  }
 
   const ctx = await userContext(user.id, camp.wa_account_id);
   if (ctx.is_demo) throw new HttpError(403, 'demo', 'Envio em lote indisponível na conta de demonstração.');

@@ -21,7 +21,7 @@ async function cached(key, load) {
 /** Contas Monuv vinculadas à WABA do envelope assinado. */
 function wabaAccounts(wabaId) {
   return cached(`w:${wabaId}`, () =>
-    sb('GET', `/rest/v1/wa_accounts?waba_id=eq.${encodeURIComponent(wabaId)}&select=id,user_id,waba_id`),
+    sb('GET', `/rest/v1/wa_accounts?waba_id=eq.${encodeURIComponent(wabaId)}&select=id,user_id,waba_id,display_phone_number,phone_number_id`),
   );
 }
 
@@ -52,15 +52,16 @@ const tsIso = (ts) => new Date(ts ? Number(ts) * 1000 : Date.now()).toISOString(
 
 function inboundRow(acc, value, m) {
   const contact = (value.contacts || []).find((x) => x.wa_id === m.from);
-  const name = contact && contact.profile && contact.profile.name ? `${contact.profile.name}: ` : '';
   return {
     user_id: acc.user_id,
     wa_account_id: acc.id,
     direction: 'inbound',
+    origin: 'api',
     from_number: m.from,
     to_number: value.metadata && value.metadata.display_phone_number,
+    contact_name: (contact && contact.profile && contact.profile.name) || null,
     type: m.type,
-    body_preview: name + String(previewText(m)).slice(0, 4000),
+    body_preview: String(previewText(m)).slice(0, 4000),
     response_payload: m,
     wa_message_id: m.id,
     status: 'received',
@@ -74,6 +75,7 @@ function echoRow(acc, m) {
     user_id: acc.user_id,
     wa_account_id: acc.id,
     direction: 'outbound',
+    origin: 'business_app',
     from_number: m.from,
     to_number: m.to,
     type: m.type,
@@ -96,6 +98,7 @@ function historyRow(acc, value, thread, m) {
     user_id: acc.user_id,
     wa_account_id: acc.id,
     direction: fromCustomer ? 'inbound' : 'outbound',
+    origin: 'history',
     from_number: fromCustomer ? m.from : m.from || business,
     to_number: fromCustomer ? business : thread.id,
     type: m.type,
@@ -173,6 +176,7 @@ async function handleChange(wabaId, field, value, acc, results) {
     if (acc) {
       const echoes = value.message_echoes || [];
       await insertMessages(echoes.map((m) => echoRow(acc, m)));
+      await touchApp(acc);
       results.push({ type: 'echo', count: echoes.length });
     }
   } else if (field === 'history') {
@@ -187,23 +191,149 @@ async function handleChange(wabaId, field, value, acc, results) {
       results.push({ type: 'history', count: rows.length });
     }
   } else if (field === 'smb_app_state_sync') {
-    // contatos do app: hoje o Monuv não tem agenda — só registramos que chegou (sem dados pessoais)
+    // contatos do app: hoje o Monuv não tem agenda — só registramos que chegou (sem dados pessoais).
+    // Mudança de contato no app é sinal de que o celular está ativo.
+    if (acc) await touchApp(acc);
     results.push({ type: 'contacts_sync', count: (value.state_sync || []).length });
-  } else if (field === 'account_update' && DISCONNECT_EVENTS.has(value.event) && wabaId) {
-    // PARTNER_REMOVED: cliente removeu o app (na Meta ou no app WhatsApp Business).
-    // ACCOUNT_OFFBOARDED: o número saiu da coexistência (troca de aparelho, novo registro no app).
-    // Em ambos a conta fica desconectada (e sem token, ver n8n_user_context) até reconectar pelo Embedded Signup.
-    await sb(
-      'PATCH',
-      `/rest/v1/wa_accounts?waba_id=eq.${encodeURIComponent(wabaId)}`,
-      { status: 'disconnected', webhook_subscribed: false, last_error: { event: value.event, disconnection_info: value.disconnection_info || null } },
-      MINIMAL,
-    );
-    results.push({ type: 'disconnected', event: value.event, waba_id: wabaId });
+  } else if (field === 'phone_number_quality_update') {
+    await handleQualityUpdate(wabaId, value, results);
+  } else if (field === 'account_update') {
+    await handleAccountUpdate(wabaId, value, results);
   }
 }
 
-const DISCONNECT_EVENTS = new Set(['PARTNER_REMOVED', 'ACCOUNT_OFFBOARDED']);
+// ---------------------------------------------------------------- coexistência: atividade do celular (lacuna 3)
+/** Mensagem enviada pelo app ou contato alterado no app = celular ativo. Zera o alerta de inatividade. */
+async function touchApp(acc) {
+  await sb('PATCH', `/rest/v1/wa_accounts?id=eq.${acc.id}`, { last_seen_at: new Date().toISOString(), inactivity_alert_at: null }, MINIMAL);
+}
+
+async function logAccountEvent(accounts, field, event, payload) {
+  if (!accounts.length) return;
+  await sb('POST', '/rest/v1/wa_account_events', accounts.map((a) => ({
+    wa_account_id: a.id,
+    user_id: a.user_id,
+    field,
+    event: event || null,
+    payload,
+  })), MINIMAL);
+}
+
+// ---------------------------------------------------------------- qualidade e limite (lacuna 2)
+/**
+ * phone_number_quality_update não traz phone_number_id: o número vem em display_phone_number.
+ * O limite hoje é do portfólio (max_daily_conversations_per_business; current_limit sai em fev/2026),
+ * então vale para todas as contas da WABA. A qualidade (GREEN/YELLOW/RED) é relida na Graph API.
+ */
+async function handleQualityUpdate(wabaId, value, results) {
+  const all = await wabaAccounts(wabaId);
+  if (!all.length) return;
+  const digits = onlyDigits(value.display_phone_number);
+  const matched = all.filter((a) => digits && onlyDigits(a.display_phone_number) === digits);
+  const targets = matched.length ? matched : all;
+  const limit = value.max_daily_conversations_per_business ?? value.current_limit ?? null;
+
+  const patch = { quality_updated_at: new Date().toISOString() };
+  if (limit !== null && limit !== undefined) patch.messaging_limit = String(limit);
+  await sb('PATCH', `/rest/v1/wa_accounts?id=in.(${all.map((a) => a.id).join(',')})`, patch, MINIMAL);
+  await logAccountEvent(targets, 'phone_number_quality_update', value.event, value);
+
+  for (const acc of matched) {
+    try {
+      const ctx = await userContext(acc.user_id, acc.id);
+      const g = await graph('GET', `/${acc.phone_number_id}`, { token: ctx.token, qs: { fields: 'quality_rating' } });
+      if (g.ok && g.response && g.response.quality_rating) {
+        await sb('PATCH', `/rest/v1/wa_accounts?id=eq.${acc.id}`, { quality_rating: g.response.quality_rating }, MINIMAL);
+      }
+    } catch (_) { /* best-effort: o evento e o limite já foram gravados */ }
+  }
+  results.push({ type: 'quality', event: value.event, limit, accounts: targets.length });
+}
+
+// ---------------------------------------------------------------- account_update (lacuna 3)
+// Desconexões. Em PARTNER_REMOVED de coexistência, disconnection_info.reason diz o motivo
+// (PRIMARY_INACTIVITY ~14 dias sem abrir o app, COMPANION_INACTIVITY, CHANGE_NUMBER, USER_RE_REGISTERED...).
+const DISCONNECT_EVENTS = new Set(['PARTNER_REMOVED', 'ACCOUNT_OFFBOARDED', 'PARTNER_APP_UNINSTALLED', 'ACCOUNT_DELETED']);
+// Avisos que não derrubam a conexão, mas precisam aparecer na tela.
+const WARNING_EVENTS = new Set(['ACCOUNT_VIOLATION', 'ACCOUNT_RESTRICTION']);
+
+const DISCONNECT_MESSAGES = {
+  PRIMARY_INACTIVITY: 'O WhatsApp Business ficou cerca de 14 dias sem ser aberto no celular. Reconecte o número.',
+  COMPANION_INACTIVITY: 'Um aparelho vinculado ficou cerca de 30 dias inativo. Reconecte o número.',
+  CHANGE_NUMBER: 'O número foi trocado no app WhatsApp Business. Reconecte com o número novo.',
+  USER_RE_REGISTERED: 'O número foi registrado de novo em outro aparelho. Reconecte o número.',
+  BUSINESS_DOWNGRADE: 'A conta voltou para o WhatsApp comum. Reconecte pelo WhatsApp Business.',
+  ACCOUNT_DISCONNECTED: 'A conexão com a API foi desfeita no app WhatsApp Business. Reconecte o número.',
+  ACCOUNT_OFFBOARDED: 'O número saiu da coexistência (troca de aparelho ou novo registro).',
+  PARTNER_APP_UNINSTALLED: 'O cliente removeu as permissões do app Monuv na Meta. Reconecte o número.',
+  PARTNER_REMOVED: 'A conta do WhatsApp deixou de ser compartilhada com a Monuv. Reconecte o número.',
+  ACCOUNT_DELETED: 'A conta do WhatsApp foi excluída na Meta.',
+};
+
+/** O envelope é assinado pela Meta; o WABA ID pode vir em entry.id e/ou em waba_info.waba_id. */
+async function accountUpdateAccounts(wabaId, value) {
+  const ids = [...new Set([wabaId, value.waba_info && value.waba_info.waba_id].filter(Boolean).map(String))];
+  const lists = await Promise.all(ids.map((id) => wabaAccounts(id)));
+  const seen = new Set();
+  return lists.flat().filter((a) => !seen.has(a.id) && seen.add(a.id));
+}
+
+async function handleAccountUpdate(wabaId, value, results) {
+  const accounts = await accountUpdateAccounts(wabaId, value);
+  const ev = value.event;
+  await logAccountEvent(accounts, 'account_update', ev, value);
+  if (!accounts.length) {
+    results.push({ type: 'account_update', event: ev, accounts: 0 });
+    return;
+  }
+  const idsFilter = `id=in.(${accounts.map((a) => a.id).join(',')})`;
+  const now = new Date().toISOString();
+
+  if (DISCONNECT_EVENTS.has(ev)) {
+    // Conta fica desconectada (e sem token, ver n8n_user_context) até reconectar pelo Embedded Signup.
+    const info = value.disconnection_info || null;
+    const reason = (info && info.reason) || ev;
+    await sb('PATCH', `/rest/v1/wa_accounts?${idsFilter}`, {
+      status: 'disconnected',
+      webhook_subscribed: false,
+      disconnected_at: now,
+      inactivity_alert_at: null,
+      last_error: { event: ev, reason, initiated_by: (info && info.initiated_by) || null, message: DISCONNECT_MESSAGES[reason] || DISCONNECT_MESSAGES[ev] || null, disconnection_info: info },
+    }, MINIMAL);
+    results.push({ type: 'disconnected', event: ev, reason, accounts: accounts.length });
+  } else if (ev === 'ACCOUNT_RECONNECTED') {
+    // volta só quem caiu por ACCOUNT_OFFBOARDED (troca de aparelho / novo registro)
+    await sb('PATCH', `/rest/v1/wa_accounts?${idsFilter}&last_error->>event=eq.ACCOUNT_OFFBOARDED`, {
+      status: 'connected',
+      disconnected_at: null,
+      last_error: null,
+      last_seen_at: now,
+    }, MINIMAL);
+    results.push({ type: 'reconnected', accounts: accounts.length });
+  } else if (ev === 'DISABLED_UPDATE') {
+    const ban = value.ban_info || {};
+    const state = String(ban.waba_ban_state || '').toUpperCase();
+    await sb('PATCH', `/rest/v1/wa_accounts?${idsFilter}`, {
+      ...(state === 'DISABLE' ? { status: 'error' } : {}),
+      last_error: { event: ev, ban_info: ban, message: state === 'DISABLE' ? 'A Meta desativou esta conta do WhatsApp.' : `Aviso da Meta: ${state || 'atualização de bloqueio'}.` },
+    }, MINIMAL);
+    results.push({ type: 'disabled_update', state, accounts: accounts.length });
+  } else if (WARNING_EVENTS.has(ev)) {
+    await sb('PATCH', `/rest/v1/wa_accounts?${idsFilter}`, {
+      last_error: { event: ev, violation_info: value.violation_info || null, restriction_info: value.restriction_info || null, message: 'A Meta registrou uma violação ou restrição de política nesta conta.' },
+    }, MINIMAL);
+    results.push({ type: 'warning', event: ev, accounts: accounts.length });
+  } else if (ev === 'PARTNER_ADDED') {
+    // confirma o onboarding e completa o portfólio do cliente, se ainda não temos
+    const owner = value.waba_info && value.waba_info.owner_business_id;
+    if (owner) {
+      await sb('PATCH', `/rest/v1/wa_accounts?${idsFilter}&business_id=is.null`, { business_id: String(owner) }, MINIMAL);
+    }
+    results.push({ type: 'partner_added', accounts: accounts.length });
+  } else {
+    results.push({ type: 'account_update', event: ev, accounts: accounts.length });
+  }
+}
 
 const results = [];
 for (const entry of (payload && payload.entry) || []) {

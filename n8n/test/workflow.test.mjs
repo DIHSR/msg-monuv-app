@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { httpMock, is, nodeCode, ok, routed, runNode, workflow } from './code-node.mjs'
 
-const ACTIONS = ['es.exchange', 'connection.refresh', 'templates.sync', 'templates.create', 'messages.send', 'campaigns.start']
+const ACTIONS = ['es.exchange', 'connection.refresh', 'templates.sync', 'templates.create', 'messages.send', 'campaigns.start', 'connection.disconnect']
 const routerCode = nodeCode('Roteador')
 const call = (body, headers = { authorization: 'Bearer jwt' }) => [{ json: { headers, body } }]
 const authOk = [is('GET', '/auth/v1/user'), ok({ id: 'user-A', email: 'a@x.com' })]

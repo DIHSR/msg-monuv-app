@@ -17,6 +17,7 @@ const esRoutes = ({ targetIds = ['WABA_A'], phones = ['PN_A'], existing = [], cl
   [is('GET', '/phone_numbers'), ok({ data: phones.map((id) => ({ id })) })],
   [is('GET', '/rest/v1/wa_accounts'), ok(existing)],
   [is('POST', '/subscribed_apps'), ok({ success: true })],
+  [is('GET', '/subscribed_apps'), ok({ data: [{ whatsapp_business_api_data: { id: 'APPID', name: 'Monuv' } }] })],
   [is('POST', '/register'), ok({ success: true })],
   [is('POST', '/rpc/claim_wa_account'), ok(claim)],
   [is('POST', '/rpc/wa_store_secret'), ok('secret-id')],
@@ -130,7 +131,7 @@ test('messages-send reserva a cota de forma atômica e devolve 429 sem chamar a 
 const startCode = nodeCode('campaigns.start')
 
 test('campaigns.start só enfileira se a transição draft→queued ocorrer (sem envio duplicado)', async () => {
-  const camp = { id: '11111111-1111-1111-1111-111111111111', wa_account_id: 'acc-1', status: 'draft' }
+  const camp = { id: '11111111-1111-1111-1111-111111111111', wa_account_id: 'acc-1', status: 'draft', list_source: 'Clientes do CRM', consent_confirmed: true }
   const m = httpMock([
     [is('GET', '/rest/v1/campaigns'), ok([camp])],
     [is('POST', '/rpc/n8n_user_context'), ok({ ok: true, can_use_app: true, is_demo: false, token: 't', account: { id: 'acc-1' } })],

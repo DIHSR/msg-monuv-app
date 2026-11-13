@@ -27,6 +27,7 @@ export const API_ACTIONS = [
   ['templates.create', 'api/templates-create.js'],
   ['messages.send', 'api/messages-send.js'],
   ['campaigns.start', 'api/campaigns-start.js'],
+  ['connection.disconnect', 'api/connection-disconnect.js'],
 ]
 
 // UUID determinístico (rebuild não muda ids → diffs limpos)
@@ -164,16 +165,15 @@ chain(
 const schedY = metaY + 520
 note(
   'Nota Agendador',
-  '## Agendador\n**1 min:** envia campanhas em lotes (fila no banco com SKIP LOCKED) — também mantém o Supabase Free ativo.\n**12 h:** testa o login do usuário demo do revisor da Meta.',
+  '## Agendador\n**1 min:** envia campanhas em lotes (fila no banco com SKIP LOCKED) e marca números em coexistência sem atividade há ~10 dias.\n**12 h:** testa o login do usuário demo do revisor da Meta.',
   [-60, schedY - 60],
   1460,
   400,
   5,
 )
-chain(
-  schedule('A cada minuto', { field: 'minutes', minutesInterval: 1 }, [0, schedY + 60]),
-  code('Fila de campanhas', 'scheduler/campaigns-worker.js', [240, schedY + 60]),
-)
+const everyMinute = schedule('A cada minuto', { field: 'minutes', minutesInterval: 1 }, [0, schedY + 60])
+chain(everyMinute, code('Fila de campanhas', 'scheduler/campaigns-worker.js', [240, schedY + 60]))
+link(everyMinute, code('Alerta de inatividade', 'scheduler/inactivity-alerts.js', [480, schedY + 60]))
 chain(
   schedule('A cada 12h', { field: 'hours', hoursInterval: 12 }, [0, schedY + 220]),
   code('Monitor do demo', 'scheduler/demo-monitor.js', [240, schedY + 220]),

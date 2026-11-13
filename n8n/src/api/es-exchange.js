@@ -77,6 +77,7 @@ try {
 
   if (!body.code) throw new HttpError(400, 'bad_request', 'Parâmetro "code" ausente.');
   if (!ENV.APP_ID || !ENV.APP_SECRET) throw new HttpError(500, 'config', 'MONUV_META_APP_ID / MONUV_META_APP_SECRET não configurados.');
+  secretKey(); // sem chave de cifragem não há onde guardar o token: falha antes de qualquer efeito na Meta
 
   // 1) code → token
   const ex = await graph('GET', '/oauth/access_token', {
@@ -103,20 +104,26 @@ try {
   // 4) número livre (ou já deste usuário) — ainda sem nenhum efeito colateral
   await assertPhoneFree(phoneId, user.id);
 
-  // 5) efeitos na Meta: assina webhooks
+  // 5) efeitos na Meta: assina webhooks e CONFERE que o app da Monuv aparece na lista.
+  //    Sem essa inscrição o cliente conecta mas nunca recebe um evento de webhook.
   const sub = await graph('POST', `/${wabaId}/subscribed_apps`, { token });
   steps.push(step('subscribe_app', sub));
+  const subCheck = await graph('GET', `/${wabaId}/subscribed_apps`, { token });
+  steps.push(step('subscribed_apps', subCheck));
+  const subscribed = appIsSubscribed(subCheck);
 
   // 6) detalhes (dizem se o número está em coexistência) e registro só fora da coexistência
   const ph = await graph('GET', `/${phoneId}`, { token, qs: { fields: PHONE_FIELDS } });
   steps.push(step('phone_details', ph));
   const wb = await graph('GET', `/${wabaId}`, { token, qs: { fields: 'name' } });
   steps.push(step('waba_details', wb));
+  const limit = await fetchMessagingLimit(phoneId, token);
+  steps.push(limit.step);
   const coexistence = isCoexistence(ph);
   const { registered, pin } = coexistence ? { registered: true, pin: null } : await registerPhone(phoneId, token);
 
   // 7) vínculo atômico que nunca troca o dono de um número
-  const ready = registered && sub.ok;
+  const ready = registered && subscribed;
   const claim = await rpc('claim_wa_account', {
     p_user_id: user.id,
     p_row: {
@@ -126,16 +133,17 @@ try {
       phone_number_id: phoneId,
       ...(ph.ok ? phoneColumns(ph.response) : {}),
       is_on_biz_app: coexistence,
+      messaging_limit: limit.limit,
       status: ready ? 'connected' : 'pending',
-      webhook_subscribed: sub.ok,
+      webhook_subscribed: subscribed,
       last_error: ready ? null : { steps: steps.filter((s) => !s.ok).map((s) => s.name) },
     },
   });
   if (!claim || !claim.ok) throw new HttpError(409, 'phone_in_use', 'Este número já está conectado a outra conta Monuv.');
   const account = claim.account;
 
-  await rpc('wa_store_secret', { p_wa_account_id: account.id, p_kind: 'token', p_value: token });
-  if (pin) await rpc('wa_store_secret', { p_wa_account_id: account.id, p_kind: 'pin', p_value: pin });
+  await storeSecret(account.id, 'token', token);
+  if (pin) await storeSecret(account.id, 'pin', pin);
   steps.push({ name: 'save_account', ok: true, response: { wa_account_id: account.id, status: account.status } });
 
   // 8) coexistência: sincronização única, só depois do vínculo garantido
@@ -145,7 +153,7 @@ try {
     saved = rows[0] || account;
   }
 
-  return respond(200, { ok: true, account: saved, coexistence, steps });
+  return respond(200, { ok: true, data: { account: saved, coexistence }, account: saved, coexistence, steps });
 } catch (e) {
   return handleError(e, { steps });
 }
