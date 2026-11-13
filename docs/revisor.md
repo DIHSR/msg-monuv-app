@@ -15,19 +15,20 @@ The demo account is already connected to a WhatsApp Business Account through
 Embedded Signup and has approved message templates.
 
 How to test whatsapp_business_management:
-  1. Log in and open "Conexão" (Connection): connected phone number, WABA ID and
-     webhook subscription status. "Conectar com o Facebook" starts Embedded Signup.
+  1. Log in and open "Conexões" (Connections): connected phone number, WABA ID and
+     webhook subscription status. "Conectar WhatsApp" starts Embedded Signup.
   2. Open "Templates": list of message templates with their review status.
-     Click "Sincronizar com a Meta" to fetch them from the Graph API.
+     Click "Sincronizar" to fetch them from the Graph API.
   3. Click "Novo template" to create a template. The panel at the bottom shows
      the exact payload sent to POST /{waba-id}/message_templates and Meta's response.
 
 How to test whatsapp_business_messaging:
-  1. Open "Enviar mensagem" (Send message), enter a phone number with country
-     code, pick an approved template and click "Enviar mensagem".
-  2. The panel shows the payload sent to POST /{phone-number-id}/messages side by
-     side with Meta's response (message ID).
-  3. Delivery/read statuses received via webhook appear in real time below.
+  1. Open "Enviar mensagem" (Send message), pick the source connection and an
+     approved template, enter the phone number (DDD + number; +55 is added
+     automatically) and click "Enviar mensagem".
+  2. The "Detalhes do envio" (Send details) column shows the payload sent to
+     POST /{phone-number-id}/messages and Meta's response (message ID).
+  3. Delivery/read statuses received via webhook appear in real time below them.
 
 The demo account has a limit of 50 messages per day.
 ```

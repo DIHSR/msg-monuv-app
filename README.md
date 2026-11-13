@@ -35,10 +35,11 @@ Painel para empresas conectarem o próprio número ao **WhatsApp Business Platfo
 | Rota | Tela | Para o revisor? |
 |---|---|---|
 | `/login` | Login por e-mail e senha | ✅ |
-| `/conexao` | Embedded Signup e status do número | ✅ |
+| `/conexoes` | Conexões: Embedded Signup (coexistência), status, qualidade, limite, desconectar | ✅ |
 | `/templates`, `/templates/novo` | Listar com status e criar (com painel JSON) | ✅ |
 | `/enviar` | Envio individual, painel **payload × resposta da Meta** e timeline de status | ✅ |
-| `/lote` | Envio em lote via CSV (oculto para o usuário demo) | ❌ |
+| `/conversas` | Mensagens por contato, com origem (sistema × celular × histórico) | ❌ |
+| `/campanhas` | Envio em lote (CSV ou lista colada), com origem da lista e consentimento (oculto para o demo) | ❌ |
 | `/privacidade`, `/termos`, `/exclusao-de-dados` | Páginas públicas exigidas pela Meta | — |
 
 ## Começando

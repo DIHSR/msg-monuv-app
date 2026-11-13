@@ -9,6 +9,13 @@ Marque `[x]` ao concluir. O detalhe de cada passo está em [`setup.md`](setup.md
 
 - [x] Migrations `0001` → `0005` aplicadas no Supabase (verificado em 2026-11-04: tudo `true`, 0 perfis).
 
+## Spec v2 (13/11/2026) — antes de tudo
+
+- [ ] **A. Aplicar a migration `0006_spec_v2.sql`** no SQL Editor do Supabase (qualidade/limite, inatividade, conversas, campanhas com consentimento).
+- [ ] **B. Gerar `MONUV_TOKEN_ENCRYPTION_KEY`** (`openssl rand -base64 32`), guardar no cofre e pôr no ambiente do n8n.
+- [ ] **C. Reimportar** `n8n/workflows/monuv.json` (ação nova `connection.disconnect` e node "Alerta de inatividade").
+- [ ] **D. Variáveis do front com os nomes novos:** `VITE_N8N_API_URL` (URL completa, terminando em `/api`), `VITE_META_APP_ID`, `VITE_META_CONFIG_ID`.
+
 ## Supabase
 
 - [ ] **1. Criar o usuário demo do revisor.** Ver `setup.md` §5.
@@ -30,6 +37,7 @@ Marque `[x]` ao concluir. O detalhe de cada passo está em [`setup.md`](setup.md
   - Supabase: `service_role` e `anon`.
   - Meta: os valores do passo 3.
   - `MONUV_COEX_SYNC=false`.
+  - `MONUV_TOKEN_ENCRYPTION_KEY` (passo B).
   - `MONUV_DEMO_EMAIL` e `MONUV_DEMO_PASSWORD`.
 - [ ] **5. Importar e ativar** o workflow `n8n/workflows/monuv.json`.
 - [ ] **6. Error Workflow.** Em Settings do workflow `Monuv`, apontar um workflow de erro que notifique.
@@ -55,7 +63,7 @@ Marque `[x]` ao concluir. O detalhe de cada passo está em [`setup.md`](setup.md
 ## Front (AWS Amplify)
 
 - [ ] **13. Preencher os dados da empresa** em `web/src/config.ts` (placeholders `[CNPJ]` etc., usados nas páginas legais) e fazer commit.
-- [ ] **14. Criar o app no Amplify** a partir do repositório `DIHSR/msg-monuv-app`, branch `main`. Preencher as variáveis de `web/.env.example`; `VITE_N8N_BASE_URL` é `https://SEU-N8N/webhook/monuv`.
+- [ ] **14. Criar o app no Amplify** a partir do repositório `DIHSR/msg-monuv-app`, branch `main`. Preencher as variáveis de `web/.env.example`; `VITE_N8N_API_URL` é `https://SEU-N8N/webhook/monuv/api`.
 - [ ] **15. Configurar o rewrite da SPA** (tabela em `setup.md` §4.4).
 - [ ] **16. Configurar o domínio** `msg.monuv.com.br` e o DNS.
 

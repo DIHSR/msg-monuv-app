@@ -9,7 +9,7 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
 > **Projeto compartilhado.** O Supabase do Monuv Mensagens é o mesmo de outros sistemas Monuv (mesmo `auth.users`, mesmo schema `public`). As migrations só criam e alteram objetos do Monuv Mensagens; **não mude configurações globais do projeto** (sign-up, Site URL, templates de e-mail) por causa deste app.
 
 1. **Aplicar as migrations:** SQL Editor → cole os arquivos de `supabase/migrations/` **em ordem**, um por vez → Run:
-   `…0001_schema.sql` → `…0002_security_fixes.sql` → `…0003_campaign_queue.sql` → `…0004_coexistence.sql` → `…0005_shared_project.sql`.
+   `…0001_schema.sql` → `…0002_security_fixes.sql` → `…0003_campaign_queue.sql` → `…0004_coexistence.sql` → `…0005_shared_project.sql` → `…0006_spec_v2.sql`.
    - Se a `0001` já foi aplicada (as tabelas `wa_accounts`, `templates` etc. existem), **comece pela `0002`**.
    - **Não use `supabase db push`** neste projeto: o histórico de migrations é compartilhado com os outros sistemas.
 2. **Quem acessa o Monuv Mensagens:** uso interno da Monuv, **sem cobrança e sem trial**. Ter login no projeto **não** dá acesso: só entra quem tem perfil em `public.profiles` com plano `active` (ou `permanent`, o demo do revisor).
@@ -36,7 +36,8 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
 
 1. **Variáveis de ambiente:** adicione as de `n8n/.env.example` ao ambiente do n8n e **reinicie**.
    - `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` permite que os Code nodes leiam `$env.MONUV_*`.
-   - `NODE_FUNCTION_ALLOW_BUILTIN=crypto` é necessário para o HMAC do webhook e para gerar o PIN de registro.
+   - `NODE_FUNCTION_ALLOW_BUILTIN=crypto` é necessário para o HMAC do webhook, para gerar o PIN de registro e para cifrar os tokens.
+   - `MONUV_TOKEN_ENCRYPTION_KEY` (**obrigatória**): chave AES-256-GCM, 32 bytes em base64 (`openssl rand -base64 32`). O token e o PIN de cada cliente são cifrados no n8n antes de irem ao Supabase (que ainda os guarda no Vault). Sem a chave o `es.exchange` recusa conectar, antes de qualquer chamada à Meta. **Guarde-a num cofre:** trocar ou perder a chave obriga a reconectar todos os números.
    - `MONUV_COEX_SYNC` (padrão `false`): com `true`, ao conectar um número em coexistência o n8n pede à Meta os **contatos e até 180 dias de histórico** do app. O histórico é gravado em `messages`. Essa chamada só pode ser feita **uma vez, até 24 h após a conexão**; depois disso, só desconectando e conectando de novo. Avalie o espaço do Supabase (Free = 500 MB) e a LGPD antes de ligar.
    - Com task runners externos (n8n 2.x, `n8n-runners`), as variáveis `NODE_FUNCTION_ALLOW_*` vão no container do **runner**.
 2. **CORS:** por padrão o workflow aceita só `https://msg.monuv.com.br`. Para um n8n de desenvolvimento, gere com origens extras:
@@ -51,12 +52,12 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
    |---|---|---|
    | API do front | Webhook POST | `/webhook/monuv/api` com `{ action, ... }` |
    | Webhook da Meta | Webhook GET + POST | `/webhook/monuv/meta-webhook` |
-   | Agendador | Schedule | campanhas: a cada 1 min · monitor do demo: a cada 12 h |
+   | Agendador | Schedule | a cada 1 min: fila de campanhas + alerta de inatividade da coexistência · a cada 12 h: monitor do demo |
 
-   Ações da API (`action`): `es.exchange`, `connection.refresh`, `templates.sync`, `templates.create`, `messages.send`, `campaigns.start`.
+   Ações da API (`action`): `es.exchange`, `connection.refresh`, `connection.disconnect`, `templates.sync`, `templates.create`, `messages.send`, `campaigns.start`.
    O **Roteador** autentica o JWT uma vez e o Switch **Ação** encaminha ao handler. Campanhas entram numa fila no banco e são enviadas pelo agendador em lotes.
 
-   No front: `VITE_N8N_BASE_URL=https://n8n.seudominio.com.br/webhook/monuv`.
+   No front: `VITE_N8N_API_URL=https://n8n.seudominio.com.br/webhook/monuv/api`.
 
 5. **Error Workflow:** em *Settings* do workflow `Monuv`, aponte um Error Workflow que te notifique (e-mail, Telegram etc.). Se o monitor do demo ou a fila de campanhas falharem, você fica sabendo antes do revisor.
 
@@ -70,9 +71,10 @@ Ordem recomendada: **Supabase → n8n → Meta App → Front (AWS) → Usuário 
 2. **WhatsApp → Configuration → Webhook:**
    - Callback URL: `https://n8n.seudominio.com.br/webhook/monuv/meta-webhook`
    - Verify token: o mesmo valor de `MONUV_META_VERIFY_TOKEN`
-   - Assine os campos: `messages`, `message_template_status_update`, `message_template_quality_update`, `account_update`, `phone_number_quality_update`.
+   - Assine os campos: `messages`, `message_template_status_update`, `message_template_quality_update`, `account_update`, `phone_number_quality_update` (qualidade e limite do número).
+   - Atenção: `message_echoes` (sem prefixo) é outro campo. O da coexistência é `smb_message_echoes`.
    - **Coexistência** (número que continua no app WhatsApp Business): assine também `smb_message_echoes` (mensagens enviadas pelo celular), `history` e `smb_app_state_sync`.
-3. **Facebook Login for Business → Configurations:** crie uma configuração do tipo **WhatsApp Embedded Signup**, com as permissões `whatsapp_business_management` e `whatsapp_business_messaging`. O **Configuration ID** vai em `VITE_FB_ES_CONFIG_ID`.
+3. **Facebook Login for Business → Configurations:** crie uma configuração do tipo **WhatsApp Embedded Signup**, com as permissões `whatsapp_business_management` e `whatsapp_business_messaging`. O **Configuration ID** vai em `VITE_META_CONFIG_ID` e o App ID em `VITE_META_APP_ID`.
    - O front abre o Embedded Signup **v5** (`extras.version: 'v5'`). No v5 a **coexistência vem ligada por padrão**: quem já usa o app WhatsApp Business escaneia um QR code e continua usando o celular; quem não usa segue o fluxo de número novo (SMS). Os v2/v3 foram descontinuados pela Meta em 15/10/2026.
    - Requisitos da Meta para coexistência: app WhatsApp Business **2.24.17+**, app como **Tech Provider/Solution Partner**, webhook ativo. O número em coexistência fica limitado a **20 mensagens/s**, e grupos, ligações, mensagens temporárias e de visualização única não passam pela API.
 4. **Facebook Login for Business → Settings:**
